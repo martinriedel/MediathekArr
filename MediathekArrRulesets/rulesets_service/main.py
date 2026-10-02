@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from .config import Settings
 from .db import Database
 from .matcher import STRATEGIES
+from .discovery import Discovery
 from .runner import Runner
 from .sources import fetch_upstream_rulesets
 
@@ -25,6 +26,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 settings = Settings.from_env()
 db = Database(settings.db_path)
 runner = Runner(settings, db)
+discovery = Discovery(settings, db, runner)
 
 
 @asynccontextmanager
@@ -121,6 +123,11 @@ def generation_log() -> list[dict[str, Any]]:
     return db.generation_log()
 
 
+@app.get("/api/discovery-log")
+def discovery_log() -> list[dict[str, Any]]:
+    return db.discovery_log()
+
+
 @app.get("/api/export")
 def export_all() -> dict[str, Any]:
     return db.export_all()
@@ -135,6 +142,8 @@ def public_settings() -> dict[str, Any]:
         "llmModel": settings.llm_model,
         "tvdbDirect": bool(settings.tvdb_api_key),
         "sonarr": bool(settings.sonarr_url and settings.sonarr_api_key),
+        "discovery": bool(settings.tvdb_api_key) and settings.discover_interval_hours > 0,
+        "discoverIntervalHours": settings.discover_interval_hours,
         "remoteTarget": settings.target_url or None,
         "minMatchRate": settings.min_match_rate,
     }
@@ -206,6 +215,14 @@ def start_generation(body: GenerateIn, background: BackgroundTasks) -> dict[str,
     return {"started": True, "tvdbIds": ids}
 
 
+@app.post("/api/discover", dependencies=[Depends(require_key)])
+def start_discovery(background: BackgroundTasks, maxTopics: int | None = None) -> dict[str, Any]:
+    if not runner.shows.can_search:
+        raise HTTPException(400, "Entdeckung braucht TVDB_API_KEY")
+    background.add_task(discovery.run, maxTopics)
+    return {"started": True}
+
+
 @app.post("/api/import/upstream", dependencies=[Depends(require_key)])
 def import_upstream(url: str | None = Query(default=None)) -> dict[str, Any]:
     return {u: _import_one(u) for u in ([url] if url else settings.upstream_urls)}
@@ -242,8 +259,20 @@ def _schedule_loop() -> None:
         time.sleep(settings.generate_interval_hours * 3600)
 
 
+def _discovery_loop() -> None:
+    time.sleep(120)  # let the initial upstream import finish first
+    while True:
+        try:
+            discovery.run()
+        except Exception as ex:
+            log.warning("Entdeckung fehlgeschlagen: %s", ex)
+        time.sleep(settings.discover_interval_hours * 3600)
+
+
 def _start_background_jobs() -> None:
     if settings.import_upstream_on_start and db.count_rulesets() == 0:
         threading.Thread(target=_initial_import, daemon=True).start()
     if settings.generate_interval_hours > 0 and settings.sonarr_url:
         threading.Thread(target=_schedule_loop, daemon=True).start()
+    if settings.discover_interval_hours > 0 and settings.tvdb_api_key:
+        threading.Thread(target=_discovery_loop, daemon=True).start()

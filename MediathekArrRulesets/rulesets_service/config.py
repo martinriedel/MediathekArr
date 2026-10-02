@@ -46,6 +46,12 @@ class Settings:
     min_match_rate: float = 0.8
     generate_interval_hours: float = 0
     retry_failed_after_hours: float = 72
+    discover_interval_hours: float = 24
+    discover_items: int = 5000
+    discover_min_items: int = 3
+    discover_min_minutes: int = 10
+    discover_max_topics: int = 50
+    discover_min_name_score: float = 0.85
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -69,4 +75,10 @@ class Settings:
             min_match_rate=_float("MIN_MATCH_RATE", 0.8),
             generate_interval_hours=_float("GENERATE_INTERVAL_HOURS", 0),
             retry_failed_after_hours=_float("RETRY_FAILED_AFTER_HOURS", 72),
+            discover_interval_hours=_float("DISCOVER_INTERVAL_HOURS", 24),
+            discover_items=int(_float("DISCOVER_ITEMS", 5000)),
+            discover_min_items=int(_float("DISCOVER_MIN_ITEMS", 3)),
+            discover_min_minutes=int(_float("DISCOVER_MIN_MINUTES", 10)),
+            discover_max_topics=int(_float("DISCOVER_MAX_TOPICS", 50)),
+            discover_min_name_score=_float("DISCOVER_MIN_NAME_SCORE", 0.85),
         )

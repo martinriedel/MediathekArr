@@ -39,6 +39,14 @@ CREATE TABLE IF NOT EXISTS rulesets (
     FOREIGN KEY(mediaId) REFERENCES media(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS discovery_log (
+    topic TEXT PRIMARY KEY,
+    tvdbId INTEGER,
+    status TEXT NOT NULL,
+    message TEXT,
+    attempted_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS generation_log (
     tvdbId INTEGER PRIMARY KEY,
     name TEXT,
@@ -314,6 +322,21 @@ class Database:
 
     def generation_log(self) -> list[dict[str, Any]]:
         return self._all("SELECT * FROM generation_log ORDER BY attempted_at DESC")
+
+    # ---------- discovery log ----------
+    def log_discovery(self, topic: str, tvdb_id: int | None, status: str, message: str) -> None:
+        self._exec(
+            "INSERT INTO discovery_log (topic, tvdbId, status, message, attempted_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(topic) DO UPDATE SET tvdbId = excluded.tvdbId, status = excluded.status, "
+            "message = excluded.message, attempted_at = excluded.attempted_at",
+            (topic, tvdb_id, status, message, now()),
+        )
+
+    def last_discovery(self, topic: str) -> dict[str, Any] | None:
+        return self._one("SELECT * FROM discovery_log WHERE topic = ?", (topic,))
+
+    def discovery_log(self) -> list[dict[str, Any]]:
+        return self._all("SELECT * FROM discovery_log ORDER BY attempted_at DESC")
 
     def last_generation(self, tvdb_id: int) -> dict[str, Any] | None:
         return self._one("SELECT * FROM generation_log WHERE tvdbId = ?", (tvdb_id,))

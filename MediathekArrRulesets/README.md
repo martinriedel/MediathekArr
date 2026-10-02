@@ -62,6 +62,22 @@ Shows that already have rulesets are skipped unless `--force`; shows that failed
 `RETRY_FAILED_AFTER_HOURS`. Generated rulesets replace earlier generated ones for that show; imported and manually
 edited rulesets are never touched.
 
+## Discovery (fully automatic)
+
+With `TVDB_API_KEY` set, the service finds new shows on its own, no show list needed:
+
+1. Every `DISCOVER_INTERVAL_HOURS` (default 24) it loads the newest `DISCOVER_ITEMS` MediathekView entries.
+2. It groups them by topic and keeps topics that look like a series (at least `DISCOVER_MIN_ITEMS` entries of
+   `DISCOVER_MIN_MINUTES` or longer) and are not covered by any ruleset yet.
+3. It searches each topic on TVDB and takes the hit whose name (any language or alias) is close enough
+   (`DISCOVER_MIN_NAME_SCORE`).
+4. The generator builds and validates a ruleset for that show as usual (patterns first, then the LLM).
+
+At most `DISCOVER_MAX_TOPICS` new topics are handled per run; topics without a TVDB match or a working ruleset are
+retried after `RETRY_FAILED_AFTER_HOURS`. Results show up under "Entdeckte Themen" on the overview page. Start a run
+by hand with the button there or `python -m rulesets_service discover [--dry-run]`. Set `DISCOVER_INTERVAL_HOURS=0`
+to turn the schedule off. Sonarr and `--tvdb-id`/`--name` remain available for shows discovery does not catch.
+
 ## LLM
 
 One integration is built in: the OpenAI-compatible chat API (`/v1/chat/completions`). Practically every local
@@ -104,6 +120,9 @@ server rejects it; answers from reasoning models (`<think>...</think>`) are hand
 | `MIN_MATCH_RATE` | `0.8` | Share of a topic's entries a ruleset must map to be accepted |
 | `SONARR_URL`, `SONARR_API_KEY` | – | Show list for `--sonarr` and the schedule |
 | `GENERATE_INTERVAL_HOURS` | `0` | Run the generator for all Sonarr shows periodically |
+| `DISCOVER_INTERVAL_HOURS` | `24` | Discovery schedule (needs `TVDB_API_KEY`; `0` = off) |
+| `DISCOVER_ITEMS`, `DISCOVER_MIN_ITEMS`, `DISCOVER_MIN_MINUTES` | `5000`, `3`, `10` | How many newest entries to scan, and what counts as a series topic |
+| `DISCOVER_MAX_TOPICS`, `DISCOVER_MIN_NAME_SCORE` | `50`, `0.85` | New topics per run; how close the TVDB name must be (0–1) |
 | `GENERATOR_TARGET_URL`, `GENERATOR_TARGET_API_KEY` | – | Upload results to another instance instead of the local database |
 
 ## API
@@ -113,6 +132,8 @@ server rejects it; answers from reasoning models (`<think>...</think>`) are hand
 | GET | `/api/v1/rulesets?page=N` (alias `/metadata/api/rulesets.php`) | Public, MediathekArr format |
 | GET | `/api/media`, `/api/rulesets?tvdbId=&mediaId=`, `/api/generation-log`, `/api/export` | Read |
 | POST/PUT/DELETE | `/api/media[/{id}]`, `/api/rulesets[/{id}]` | Edit by hand (key) |
+| POST | `/api/discover[?maxTopics=]` | Start a discovery run in the background (key) |
+| GET | `/api/discovery-log` | Topics discovery has looked at |
 | POST | `/api/generate` `{tvdbIds, names, sonarr, force, forceLlm}` | Start generator in the background (key) |
 | PUT | `/api/generated/{tvdbId}` `{name, rulesets, matchRate}` | Upload from a remote generator (key) |
 | POST | `/api/import/upstream[?url=]`, `/api/import` | Import from the upstream sources / from an export (key) |

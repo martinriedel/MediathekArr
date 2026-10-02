@@ -87,3 +87,39 @@ def test_runner_stores_locally_and_skips_known(show, monkeypatch):
     assert r.run_one(4711)["status"] == "skipped"
     assert r.run_one(4711, force=True)["status"] == "ok"
     assert len(db.list_rulesets(tvdb_id=4711)) == 1  # replaced, not duplicated
+
+
+def test_discovery_finds_topic_and_generates(show, monkeypatch, tmp_path):
+    from rulesets_service import discovery as disc_mod
+    from rulesets_service import runner as runner_mod
+    from rulesets_service.config import Settings
+    from rulesets_service.db import Database
+
+    db = Database(":memory:")
+    s = Settings(min_match_rate=0.8, tvdb_api_key="k", discover_items=100, discover_min_items=3,
+                 discover_min_minutes=10, discover_max_topics=10, discover_min_name_score=0.85,
+                 retry_failed_after_hours=72)
+    r = runner_mod.Runner(s, db)
+    items = make_items(show, "{name} (S{s:02d}/E{e:02d})")
+    noise = [Item(topic="Nachrichten", title=f"Kurz {i}", duration=120, url_video=f"n{i}") for i in range(10)]
+    unknown = [Item(topic="Unbekannte Doku", title=f"Teil {i}", duration=1800, url_video=f"u{i}") for i in range(5)]
+    monkeypatch.setattr(disc_mod, "mediathekview_query", lambda q, n: items + noise + unknown)
+    monkeypatch.setattr(r.shows, "search", lambda name: [{"tvdb_id": 4711, "name": "Testserie", "translations": {}, "aliases": []}]
+                        if name == "Testserie" else [{"tvdb_id": 1, "name": "Etwas ganz anderes", "translations": {}, "aliases": []}])
+    monkeypatch.setattr(r.shows, "get_show", lambda tid: show)
+    monkeypatch.setattr(runner_mod, "fetch_items_for_show", lambda s_, topics: items)
+
+    d = disc_mod.Discovery(s, db, r)
+    res = {x["topic"]: x["status"] for x in d.run()}
+    assert res == {"Testserie": "ok", "Unbekannte Doku": "no_match"}  # short news clips are not a series
+    assert db.list_rulesets(tvdb_id=4711)
+    assert d.run() == []  # covered topic and recent no_match are not retried
+
+
+def test_best_tvdb_match_uses_translations():
+    from rulesets_service.discovery import best_tvdb_match
+    hit, score = best_tvdb_match("Die Heiland - Wir sind Anwalt", [
+        {"tvdb_id": 1, "name": "Heiland: We Are Lawyers", "translations": {"deu": "Die Heiland – Wir sind Anwalt"}},
+        {"tvdb_id": 2, "name": "Anwalt", "translations": {}},
+    ])
+    assert hit["tvdb_id"] == 1 and score > 0.9

@@ -158,7 +158,7 @@ class ShowSource:
             tid = d.get("tvdb_id") or str(d.get("id", "")).removeprefix("series-")
             if str(tid).isdigit():
                 out.append({"tvdb_id": int(tid), "name": d.get("name"), "year": d.get("year"),
-                            "translations": d.get("translations") or {}})
+                            "translations": d.get("translations") or {}, "aliases": d.get("aliases") or []})
         return out
 
 

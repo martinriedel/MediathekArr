@@ -38,9 +38,15 @@
       <label><input id="sonarr" type="checkbox"> alle aus Sonarr</label>
       <label><input id="force" type="checkbox"> vorhandene neu erzeugen</label>
       <button id="gen">Starten</button>
+      <button id="disc">Neue Serien entdecken</button>
       <button id="imp">Von pcjones.de &amp; Rundfunkarr importieren</button>
     </div>
     <p id="genout" class="muted"></p>
+  </section>
+
+  <section>
+    <h2>Entdeckte Themen</h2>
+    <div class="scroll"><table id="disclog"><thead><tr><th>Thema</th><th>Status</th><th>Ergebnis</th><th>Zeit</th></tr></thead><tbody></tbody></table></div>
   </section>
 
   <section>
@@ -62,12 +68,15 @@ try { $("#key").value = localStorage.getItem("rulesetsKey") || ""; } catch {}
 $("#selfurl").textContent = location.origin;
 
 async function load() {
-  const [st, health, log, rs] = await Promise.all(["/api/settings", "/health", "/api/generation-log", "/api/rulesets"].map(u => fetch(u).then(r => r.json())));
+  const [st, health, log, rs, disc] = await Promise.all(["/api/settings", "/health", "/api/generation-log", "/api/rulesets", "/api/discovery-log"].map(u => fetch(u).then(r => r.json())));
   const yes = (b, t) => `<span class="${b ? "ok" : "muted"}">${b ? "✓" : "–"} ${t}</span>`;
   $("#status").innerHTML = [`${health.rulesets} Rulesets`, yes(st.writable, "Schreibzugriff"), yes(st.llm, "KI " + (st.llmModel || "")),
-    yes(st.tvdbDirect, "TVDB-Key"), yes(st.sonarr, "Sonarr"), st.remoteTarget ? "Ziel: " + esc(st.remoteTarget) : ""].filter(Boolean).join(" · ");
+    yes(st.tvdbDirect, "TVDB-Key"), yes(st.sonarr, "Sonarr"), yes(st.discovery, "Entdeckung" + (st.discovery ? " alle " + st.discoverIntervalHours + " h" : "")), st.remoteTarget ? "Ziel: " + esc(st.remoteTarget) : ""].filter(Boolean).join(" · ");
   $("#log tbody").innerHTML = log.slice(0, 50).map(l => `<tr><td>${esc(l.name)} <span class="muted">${l.tvdbId}</span></td>
     <td class="${l.status === "ok" ? "ok" : "bad"}">${esc(l.status)}</td><td>${esc(l.message)}</td><td class="muted">${esc(l.attempted_at)}</td></tr>`).join("")
+    || `<tr><td colspan="4" class="muted">noch keine</td></tr>`;
+  $("#disclog tbody").innerHTML = disc.slice(0, 100).map(l => `<tr><td>${esc(l.topic)}</td>
+    <td class="${l.status === "ok" ? "ok" : l.status === "covered" ? "muted" : "bad"}">${esc(l.status)}</td><td>${esc(l.message)}</td><td class="muted">${esc(l.attempted_at)}</td></tr>`).join("")
     || `<tr><td colspan="4" class="muted">noch keine</td></tr>`;
   rulesets = rs; render();
 }
@@ -93,6 +102,7 @@ $("#gen").onclick = async () => {
   const body = { tvdbIds: parts.filter(p => /^\d+$/.test(p)).map(Number), names: parts.filter(p => !/^\d+$/.test(p)), sonarr: $("#sonarr").checked, force: $("#force").checked };
   if (await post("/api/generate", body)) setTimeout(load, 5000);
 };
+$("#disc").onclick = async () => { if (await post("/api/discover")) setTimeout(load, 10000); };
 $("#imp").onclick = async () => { if (await post("/api/import/upstream")) load(); };
 $("#filter").oninput = render;
 load();
