@@ -31,6 +31,10 @@ def main(argv: list[str] | None = None) -> int:
     gen.add_argument("--force-llm", action="store_true", help="eingebaute Muster überspringen, direkt die KI fragen")
     gen.add_argument("--dry-run", action="store_true", help="nur anzeigen, nichts speichern")
 
+    disc = sub.add_parser("discover", help="neue Serien in MediathekView finden und Rulesets erzeugen (braucht TVDB_API_KEY)")
+    disc.add_argument("--max-topics", type=int, help="höchstens so viele neue Themen pro Lauf")
+    disc.add_argument("--dry-run", action="store_true", help="nur anzeigen, nichts speichern")
+
     sub.add_parser("export", help="alle Daten als JSON ausgeben")
 
     args = p.parse_args(argv)
@@ -55,6 +59,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     runner = Runner(settings, db)
+    if args.cmd == "discover":
+        from .discovery import Discovery
+        for r in Discovery(settings, db, runner).run(args.max_topics, dry_run=args.dry_run):
+            print(json.dumps(r, ensure_ascii=False))
+        return 0
+
     ids = list(args.tvdb_id)
     if args.name:
         ids += runner.search_ids(args.name)
