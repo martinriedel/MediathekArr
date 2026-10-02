@@ -1,4 +1,5 @@
-using MediathekArr.Services;
+﻿using MediathekArr.Services;
+using MediathekArr.Utilities;
 using Microsoft.AspNetCore.Mvc;
 using System.Text;
 
@@ -57,6 +58,11 @@ public class TController(MediathekSearchService mediathekSearchService, ItemLook
                 if (!string.IsNullOrEmpty(tvdbid) && int.TryParse(tvdbid, out var parsedTvdbid))
                 {
                     var tvdbData = await _itemLookupService.GetShowInfoByTvdbId(parsedTvdbid);
+                    if (tvdbData is null)
+                    {
+                        // No show data (unknown id or the metadata API failed): answer with no results instead of a 500
+                        return Content(NewznabUtils.SerializeRss(NewznabUtils.GetEmptyRssResult()), "application/xml", Encoding.UTF8);
+                    }
 
                     string searchResults = await _mediathekSearchService.FetchSearchResultsFromApiById(tvdbData, season, episode, limit, offset);
 

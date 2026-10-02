@@ -130,3 +130,32 @@ def test_migrates_old_database(tmp_path):
     assert db.get_ruleset(1)["upstream_key"] == f"{LEGACY_UPSTREAM}#17"
     stats = db.upsert_upstream([{**UPSTREAM_ENTRY, "topic": "Neu"}], source=RUNDFUNKARR_URL)  # id 17 again: no clash
     assert stats["created"] == 1
+
+
+def test_get_show_in_mediathekarr_format(client, monkeypatch):
+    shows = main.runner.shows
+    monkeypatch.setattr(main.settings, "tvdb_api_key", "k")
+    monkeypatch.setattr(shows, "_payloads", {})
+    calls = []
+
+    def fake_get(path, params=None):
+        calls.append(path)
+        if path.endswith("/translations/deu"):
+            return {"data": {"name": "Wir werden Camper"}}
+        return {"data": {"name": "Wir werden Camper", "aliases": [{"language": "eng", "name": "x"}, {"language": "deu", "name": "Camper"}],
+                         "episodes": [{"name": "Folge 1", "aired": "2024-05-01", "runtime": 30, "seasonNumber": 1, "number": 1, "absoluteNumber": None}]}}
+    monkeypatch.setattr(shows, "_tvdb_get", fake_get)
+    body = client.get("/api/v1/get_show.php?tvdbid=397310").json()
+    assert body["status"] == "success"
+    data = body["data"]
+    assert data["id"] == 397310 and data["german_name"] == "Wir werden Camper"
+    assert data["aliases"] == [{"language": "deu", "name": "Camper"}]
+    assert data["episodes"][0] == {"name": "Folge 1", "aired": "2024-05-01", "runtime": 30, "seasonNumber": 1,
+                                   "episodeNumber": 1, "absoluteNumber": None}
+    client.get("/api/v1/get_show.php?tvdbid=397310")
+    assert len(calls) == 2  # second call served from cache
+
+    def broken(path, params=None):
+        raise RuntimeError("TVDB down")
+    monkeypatch.setattr(shows, "_tvdb_get", broken)
+    assert client.get("/api/v1/get_show.php?tvdbid=1").json()["status"] == "error"

@@ -43,7 +43,9 @@ services:
       - "5008:5008"
 ```
 
-Then set `MEDIATHEKARR_RULESETS_URL=http://<host>:5008/api/v1/rulesets` on MediathekArr.
+Then set `MEDIATHEKARR_RULESETS_URL=http://<host>:5008/api/v1/rulesets` on MediathekArr. With `TVDB_API_KEY` set, the
+service also serves show data (`get_show.php`) from TVDB with your key, so MediathekArr no longer needs
+mediathekarr.pcjones.de at all: also set `MEDIATHEKARR_API_BASE_URL=http://<host>:5008/api/v1`.
 The overview page is at `http://<host>:5008/`.
 
 ## Generate locally, host elsewhere
@@ -135,6 +137,7 @@ server rejects it; answers from reasoning models (`<think>...</think>`) are hand
 | Method | Path | |
 |---|---|---|
 | GET | `/api/v1/rulesets?page=N` (alias `/metadata/api/rulesets.php`) | Public, MediathekArr format |
+| GET | `/api/v1/get_show.php?tvdbid=N` | Public, show data in MediathekArr format (needs `TVDB_API_KEY`) |
 | GET | `/api/media`, `/api/rulesets?tvdbId=&mediaId=`, `/api/generation-log`, `/api/export` | Read |
 | POST/PUT/DELETE | `/api/media[/{id}]`, `/api/rulesets[/{id}]` | Edit by hand (key) |
 | POST | `/api/discover[?maxTopics=]` | Start a discovery run in the background (key) |

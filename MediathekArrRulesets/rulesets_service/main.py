@@ -96,6 +96,22 @@ def public_rulesets(page: int = 1) -> dict[str, Any]:
     return db.public_rulesets_page(page)
 
 
+@app.get("/api/v1/get_show.php")
+def get_show(tvdbid: int) -> dict[str, Any]:
+    """Show data like mediathekarr.pcjones.de/api/v1/get_show.php, from TVDB with this instance's key.
+    Point MediathekArr's MEDIATHEKARR_API_BASE_URL at …/api/v1 to use it."""
+    if not settings.tvdb_api_key:
+        return {"status": "error", "message": "TVDB_API_KEY ist nicht gesetzt"}
+    try:
+        data = runner.shows.show_payload(tvdbid)
+    except Exception as ex:  # TVDB down, unknown id, ...
+        log.warning("get_show %s failed: %s", tvdbid, ex)
+        return {"status": "error", "message": f"TVDB-Abruf fehlgeschlagen: {ex}"}
+    if not data:
+        return {"status": "error", "message": f"Serie {tvdbid} nicht gefunden"}
+    return {"status": "success", "data": data}
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     return {"status": "ok", "rulesets": db.count_rulesets()}
