@@ -98,7 +98,7 @@ def test_discovery_finds_topic_and_generates(show, monkeypatch, tmp_path):
 
     db = Database(":memory:")
     s = Settings(min_match_rate=0.8, tvdb_api_key="k", discover_items=100, discover_min_items=3,
-                 discover_min_minutes=10, discover_max_topics=10, discover_min_name_score=0.85, discover_channels=("A", "B"),
+                 discover_min_minutes=10, discover_max_topics=10, discover_min_name_score=0.85, discover_channels=("A", "B"), discover_source="api",
                  retry_failed_after_hours=72)
     r = runner_mod.Runner(s, db)
     items = make_items(show, "{name} (S{s:02d}/E{e:02d})")
@@ -150,3 +150,72 @@ def test_best_tvdb_match_uses_translations():
         {"tvdb_id": 2, "name": "Anwalt", "translations": {}},
     ])
     assert hit["tvdb_id"] == 1 and score > 0.9
+
+
+def test_discovery_reads_filmliste_and_falls_back(show, monkeypatch):
+    from rulesets_service import discovery as disc_mod
+    from rulesets_service import runner as runner_mod
+    from rulesets_service.config import Settings
+    from rulesets_service.db import Database
+
+    s = Settings(tvdb_api_key="k", discover_min_items=3, discover_min_minutes=10)
+    r = runner_mod.Runner(s, Database(":memory:"))
+    monkeypatch.setattr(r.shows, "search", lambda name: [])
+    serie = [Item(channel="WDR", topic="Alte Serie", title=f"Folge {i}", duration=1800, url_video=f"a{i}") for i in range(4)]
+    monkeypatch.setattr(disc_mod, "filmliste_items", lambda url: iter(serie))
+    api_called = []
+    monkeypatch.setattr(disc_mod, "mediathekview_pages", lambda *a, **kw: api_called.append(1) or iter([]))
+    d = disc_mod.Discovery(s, r.db, r)
+    assert [x["topic"] for x in d.run(dry_run=True)] == ["Alte Serie"] and not api_called
+
+    def broken(url):
+        raise OSError("Download kaputt")
+    monkeypatch.setattr(disc_mod, "filmliste_items", broken)
+    assert d.run(dry_run=True) == [] and api_called  # falls back to the search API
+
+
+def test_filmliste_download_is_streamed_and_decoded(monkeypatch):
+    import lzma
+
+    import httpx
+    from rulesets_service import sources
+    rows = ['"X":["ZDF","Die Kanzlei","Folge %d – Recht","01.01.2026","20:15:00","00:45:00","700","Ärger","https://z/%d.mp4",'
+            '"https://web","","","","","","","1767300000","","DE","false"]' % (i, i) for i in range(3000)]
+    text = '{"Filmliste":["a","b"],"Filmliste":["Sender","Thema","Titel","Datum","Zeit","Dauer","Größe [MB]","Beschreibung",' \
+           '"Url","Website","Url Untertitel","Url RTMP","Url Klein","Url RTMP Klein","Url HD","Url RTMP HD","DatumL","Url History",' \
+           '"Geo","neu"],' + ",".join(rows) + "}"
+    blob = lzma.compress(text.encode("utf-8"))
+    monkeypatch.setattr(sources, "_client", lambda: httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, content=blob))))
+    monkeypatch.setattr(httpx.Response, "iter_bytes", lambda self, n=None: (blob[i:i + 7] for i in range(0, len(blob), 7)))
+    items = list(sources.filmliste_items("https://liste/Filmliste-akt.xz"))
+    assert len(items) == 3000
+    assert items[2999].title == "Folge 2999 - Recht" and items[0].description == "Ärger" and items[0].duration == 2700
+
+
+def test_recheck_regenerates_generated_and_reports_imported(show, monkeypatch):
+    from rulesets_service import runner as runner_mod
+    from rulesets_service.config import Settings
+    from rulesets_service.db import Database
+
+    db = Database(":memory:")
+    r = runner_mod.Runner(Settings(min_match_rate=0.8), db)
+    monkeypatch.setattr(r.shows, "get_show", lambda tid: show)
+    current = {"fmt": "{name} (S{s:02d}/E{e:02d})"}
+    monkeypatch.setattr(runner_mod, "fetch_items_for_show", lambda s, topics: make_items(s, current["fmt"]))
+
+    assert r.run_one(4711)["status"] == "ok"
+    old = db.list_rulesets(tvdb_id=4711)[0]
+    assert r.recheck_all() == []  # still fits
+
+    current["fmt"] = "Folge {e}: {name} ({d})"  # the channel changed its title format
+    res = r.recheck_all()
+    assert [x["status"] for x in res] == ["regenerated"]
+    new = db.list_rulesets(tvdb_id=4711)
+    assert len(new) == 1 and new[0]["source"] == "generated" and new[0]["id"] != old["id"]
+
+    # imported rulesets are never overwritten, only reported
+    db._exec("UPDATE rulesets SET source = 'upstream'")
+    current["fmt"] = "{d}"
+    res = r.recheck_all()
+    assert [x["status"] for x in res] == ["stale"]
+    assert db.list_rulesets(tvdb_id=4711)[0]["source"] == "upstream"

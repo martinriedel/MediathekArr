@@ -9,8 +9,9 @@ import httpx
 
 from .config import Settings
 from .db import Database
-from .generator import GenerationResult, generate
+from .generator import GenerationResult, generate, ruleset_from_payload
 from .llm import LLMClient
+from .matcher import apply_rulesets
 from .sources import ShowSource, fetch_items_for_show, sonarr_series
 
 log = logging.getLogger(__name__)
@@ -81,6 +82,49 @@ class Runner:
         log.info("%s (%s): %s - %s", result.show_name, tvdb_id, status, result.message)
         return {"tvdbId": tvdb_id, "name": result.show_name, "status": status, "message": result.message,
                 "usedLlm": result.used_llm, "tried": result.tried, "rulesets": result.rulesets_payload()}
+
+    def recheck(self, tvdb_id: int, dry_run: bool = False) -> dict[str, Any] | None:
+        """Check a show's stored rulesets against the current MediathekView entries.
+
+        Below MIN_MATCH_RATE, rulesets this service generated are generated anew (the old ones stay if that fails);
+        imported or hand-made ones are never overwritten, only reported as "stale". Returns None while they still fit."""
+        stored = self.db.list_rulesets(tvdb_id=tvdb_id)
+        if not stored:
+            return None
+        show = self.shows.get_show(tvdb_id)
+        if show is None:
+            return None
+        topics = sorted({t for r in stored for t in r["topic"].split("|") if t.strip()})
+        items = fetch_items_for_show(show, topics)
+        matches, unmatched = apply_rulesets(items, [ruleset_from_payload(r) for r in stored], show)
+        total = len(matches) + len(unmatched)
+        if not total:
+            return None  # nothing in the Mediathek right now, nothing to judge
+        rate = len(matches) / total
+        if rate >= self.s.min_match_rate:
+            return None
+        name = stored[0]["mediaName"]
+        summary = f"passt nur noch auf {len(matches)}/{total} Einträge ({rate:.0%})"
+        if any(r["source"] != "generated" for r in stored):
+            if not dry_run:
+                self.db.log_generation(tvdb_id, name, "stale", summary + "; importiert oder von Hand, bleibt unverändert")
+            return {"tvdbId": tvdb_id, "name": name, "status": "stale", "message": summary}
+        res = self.run_one(tvdb_id, force=True, dry_run=dry_run)
+        status = "regenerated" if res["status"] == "ok" else "stale"
+        return {"tvdbId": tvdb_id, "name": name, "status": status, "message": f"{summary}; neu erzeugt: {res['message']}"}
+
+    def recheck_all(self, dry_run: bool = False) -> list[dict[str, Any]]:
+        out = []
+        for tvdb_id in sorted({r["tvdbId"] for r in self.db.list_rulesets() if r["tvdbId"]}):
+            try:
+                res = self.recheck(tvdb_id, dry_run=dry_run)
+            except Exception as ex:
+                log.warning("Prüfung von %s fehlgeschlagen: %s", tvdb_id, ex)
+                continue
+            if res:
+                log.info("Prüfung %s (%s): %s - %s", res["name"], tvdb_id, res["status"], res["message"])
+                out.append(res)
+        return out
 
     def run_many(self, tvdb_ids: list[int], **kw: Any) -> list[dict[str, Any]]:
         out = []

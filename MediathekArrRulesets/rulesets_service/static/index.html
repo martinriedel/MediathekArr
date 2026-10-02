@@ -39,7 +39,7 @@
       <label><input id="force" type="checkbox"> vorhandene neu erzeugen</label>
       <button id="gen">Starten</button>
       <button id="disc">Neue Serien entdecken</button>
-      <button id="discfull" title="Ganze Mediathek, ohne Themen-Limit, auch frühere Fehlschläge neu versuchen. Kann Stunden dauern.">Kompletter Scan</button>
+      <button id="discfull" title="Ganze Mediathek, ohne Themen-Limit, frühere Fehlschläge neu versuchen und alle vorhandenen Rulesets prüfen. Kann Stunden dauern.">Kompletter Scan</button>
       <button id="imp">Von pcjones.de &amp; Rundfunkarr importieren</button>
     </div>
     <p id="genout" class="muted"></p>
@@ -77,7 +77,7 @@ async function load() {
     <td class="${l.status === "ok" ? "ok" : "bad"}">${esc(l.status)}</td><td>${esc(l.message)}</td><td class="muted">${esc(l.attempted_at)}</td></tr>`).join("")
     || `<tr><td colspan="4" class="muted">noch keine</td></tr>`;
   $("#disclog tbody").innerHTML = disc.slice(0, 100).map(l => `<tr><td>${esc(l.topic)}</td>
-    <td class="${l.status === "ok" ? "ok" : l.status === "covered" ? "muted" : "bad"}">${esc(l.status)}</td><td>${esc(l.message)}</td><td class="muted">${esc(l.attempted_at)}</td></tr>`).join("")
+    <td class="${["ok", "regenerated"].includes(l.status) ? "ok" : l.status === "covered" ? "muted" : "bad"}">${esc(l.status)}</td><td>${esc(l.message)}</td><td class="muted">${esc(l.attempted_at)}</td></tr>`).join("")
     || `<tr><td colspan="4" class="muted">noch keine</td></tr>`;
   rulesets = rs; render();
 }

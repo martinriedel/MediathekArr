@@ -57,6 +57,8 @@ class Settings:
     discover_max_topics: int = 200
     discover_min_name_score: float = 0.85
     discover_retry_no_match_days: float = 30
+    discover_source: str = "filmliste"
+    discover_filmliste_url: str = "https://liste.mediathekview.de/Filmliste-akt.xz"
     discover_channels: tuple[str, ...] = tuple(DEFAULT_DISCOVER_CHANNELS.split(","))
 
     @classmethod
@@ -88,5 +90,7 @@ class Settings:
             discover_max_topics=int(_float("DISCOVER_MAX_TOPICS", 200)),
             discover_min_name_score=_float("DISCOVER_MIN_NAME_SCORE", 0.85),
             discover_retry_no_match_days=_float("DISCOVER_RETRY_NO_MATCH_DAYS", 30),
+            discover_source=_str("DISCOVER_SOURCE", "filmliste").lower(),
+            discover_filmliste_url=_str("DISCOVER_FILMLISTE_URL", "https://liste.mediathekview.de/Filmliste-akt.xz"),
             discover_channels=tuple(c.strip() for c in _str("DISCOVER_CHANNELS", DEFAULT_DISCOVER_CHANNELS).split(",") if c.strip()),
         )

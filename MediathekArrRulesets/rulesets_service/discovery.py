@@ -13,7 +13,7 @@ from .config import Settings
 from .db import Database
 from .matcher import Item, format_title, should_skip_item
 from .runner import Runner
-from .sources import mediathekview_pages
+from .sources import filmliste_items, mediathekview_pages
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +76,8 @@ class Discovery:
         return datetime.now(timezone.utc) - when < wait
 
     def run(self, max_topics: int | None = None, dry_run: bool = False, full: bool = False) -> list[dict[str, Any]]:
-        """full: whole catalogue, no topic limit, and topics that failed or had no TVDB match are tried again."""
+        """full: whole catalogue, no topic limit, topics that failed or had no TVDB match are tried again, and all stored
+        rulesets are checked against the current entries (generated ones that no longer fit are generated anew)."""
         if not self.runner.shows.can_search:
             raise RuntimeError("Entdeckung braucht TVDB_API_KEY für die Suche nach Seriennamen")
         if not self._lock.acquire(blocking=False):
@@ -89,23 +90,25 @@ class Discovery:
     def _run(self, max_topics: int | None, dry_run: bool, full: bool) -> list[dict[str, Any]]:
         limit_items = 0 if full else self.s.discover_items
         counts: dict[str, int] = defaultdict(int)
-        seen: set[str] = set()
-        # one walk per channel, because the search API only pages through a limited window per query;
-        # only programme-length entries, and a short pause between pages keeps the load on mediathekviewweb.de low
-        for channel in self.s.discover_channels:
-            query = [{"fields": ["channel"], "query": channel}]
-            for page in mediathekview_pages(query, limit_items, duration_min=self.s.discover_min_minutes * 60, pause=0.5):
-                fresh = []
-                for it in page:
-                    key = it.url_video or f"{it.channel}|{it.topic}|{it.title}|{it.timestamp}"
-                    if key not in seen:
-                        seen.add(key)
-                        fresh.append(it)
-                count_topics(fresh, self.s.discover_min_minutes, counts)
+        seen: set[int] = set()
+        source = "filmliste"
+        if self.s.discover_source == "filmliste":
+            try:
+                self._count_filmliste(counts, seen)
+            except Exception as ex:
+                log.warning("Filmliste nicht lesbar (%s), nehme die Such-API", ex)
+                counts.clear()
+                seen.clear()
+                source = "api"
+        else:
+            source = "api"
+        if source == "api":
+            self._count_api(counts, seen, limit_items)
         covered = self._covered_topics()
         todo = [(t, n) for t, n in candidate_topics([], self.s.discover_min_items, self.s.discover_min_minutes, counts)
                 if t not in covered and not self._recently_tried(t, full)]
-        log.info("Entdeckung%s: %d Einträge, %d Themen, %d neu", " (komplett)" if full else "", len(seen), len(counts), len(todo))
+        log.info("Entdeckung%s über %s: %d Einträge, %d Themen, %d neu", " (komplett)" if full else "", source,
+                 len(seen), len(counts), len(todo))
         if not full:
             todo = todo[: max_topics or self.s.discover_max_topics]
         elif max_topics:
@@ -113,7 +116,40 @@ class Discovery:
         results = []
         for topic, count in todo:
             results.append(self._one(topic, count, dry_run))
+        if full:
+            # existing rulesets: does each still fit what the Mediathek shows today?
+            for res in self.runner.recheck_all(dry_run=dry_run):
+                results.append(self._log(res["name"], res["tvdbId"], res["status"], res["message"], dry_run))
         return results
+
+    def _add(self, items: Iterable[Item], counts: dict[str, int], seen: set[int]) -> None:
+        fresh = []
+        for it in items:
+            key = hash(it.url_video or f"{it.channel}|{it.topic}|{it.title}|{it.timestamp}")
+            if key not in seen:
+                seen.add(key)
+                fresh.append(it)
+        count_topics(fresh, self.s.discover_min_minutes, counts)
+
+    def _count_filmliste(self, counts: dict[str, int], seen: set[int]) -> None:
+        """MediathekView's full film list: every channel and every entry in one download."""
+        batch: list[Item] = []
+        for it in filmliste_items(self.s.discover_filmliste_url):
+            batch.append(it)
+            if len(batch) >= 5000:
+                self._add(batch, counts, seen)
+                batch = []
+        self._add(batch, counts, seen)
+        if not seen:
+            raise RuntimeError("Filmliste ist leer")
+
+    def _count_api(self, counts: dict[str, int], seen: set[int], limit_items: int) -> None:
+        # one walk per channel, because the search API only pages through a limited window per query;
+        # only programme-length entries, and a short pause between pages keeps the load on mediathekviewweb.de low
+        for channel in self.s.discover_channels:
+            query = [{"fields": ["channel"], "query": channel}]
+            for page in mediathekview_pages(query, limit_items, duration_min=self.s.discover_min_minutes * 60, pause=0.5):
+                self._add(page, counts, seen)
 
     def _one(self, topic: str, count: int, dry_run: bool) -> dict[str, Any]:
         try:
