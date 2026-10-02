@@ -1,4 +1,4 @@
-﻿namespace MediathekArrLib.Models.Rulesets;
+﻿namespace MediathekArr.Models.Rulesets;
 
 public enum MatchType
 {
@@ -6,5 +6,5 @@ public enum MatchType
     Contains,
     Regex,
     GreaterThan,
-    LessThan
+    LowerThan
 }

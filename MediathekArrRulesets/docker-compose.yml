@@ -1,0 +1,15 @@
+# Standalone ruleset service: copy .env.example to .env, fill it in, then `docker compose up -d`.
+services:
+  mediathekarr-rulesets:
+    image: ghcr.io/martinriedel/mediathekarr-rulesets:${RULESETS_TAG:-dev}
+    container_name: mediathekarr-rulesets
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - TZ=${TZ:-Europe/Berlin}
+    volumes:
+      - ./data:/data
+    ports:
+      - "${RULESETS_PORT:-5008}:5008"

@@ -1,8 +1,8 @@
-using MediathekArrServer.Services;
+using MediathekArr.Services;
 using Microsoft.AspNetCore.Mvc;
 using System.Text;
 
-namespace MediathekArrServer.Controllers;
+namespace MediathekArr.Controllers;
 
 [ApiController]
 [Route("api")]
@@ -84,27 +84,13 @@ public class TController(MediathekSearchService mediathekSearchService, ItemLook
 
 
     [HttpGet("fake_nzb_download")]
-    public IActionResult FakeNzbDownload([FromQuery] string encodedUrl, [FromQuery] string encodedTitle)
+    public IActionResult FakeNzbDownload([FromQuery] string encodedVideoUrl, [FromQuery] string? encodedSubtitleUrl, [FromQuery] string encodedTitle)
     {
-        string decodedUrl;
-        string decodedTitle;
-        try
-            {
-            var base64EncodedBytesUrl = Convert.FromBase64String(encodedUrl);
-            decodedUrl = Encoding.UTF8.GetString(base64EncodedBytesUrl);
-            var base64EncodedBytesTitle = Convert.FromBase64String(encodedTitle);
-            decodedTitle = Encoding.UTF8.GetString(base64EncodedBytesTitle);
-        }
-        catch (FormatException)
-        {
-            return BadRequest("Invalid base64 string.");
-        }
-
-        // Define a basic NZB XML structure with the comment and encoded URL.
         var nzbContent = $@"<?xml version=""1.0"" encoding=""UTF-8"" ?>
 <!DOCTYPE nzb PUBLIC ""-//newzBin//DTD NZB 1.0//EN"" ""http://www.newzbin.com/DTD/nzb/nzb-1.0.dtd"">
-<!-- {decodedTitle} -->
-<!-- {decodedUrl} -->
+<!-- {encodedTitle} -->
+<!-- {encodedVideoUrl} -->
+<!-- {encodedSubtitleUrl ?? string.Empty} -->
 <nzb>
     <file post_id=""1"">
         <groups>

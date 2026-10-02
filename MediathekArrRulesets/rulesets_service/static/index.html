@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediathekArr Rulesets</title>
+<style>
+  :root { --bg:#f7f7f8; --fg:#1c1c1e; --muted:#6b6b70; --card:#fff; --line:#e3e3e6; --accent:#2f6fde; --ok:#1f8a4c; --bad:#c0392b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#151517; --fg:#ececee; --muted:#9a9aa0; --card:#1f1f22; --line:#333338; --accent:#6c9cff; --ok:#4cc27e; --bad:#ff6b5b; } }
+  body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:1100px; margin:0 auto; padding:16px; }
+  h1 { font-size:20px; margin:8px 0 16px; } h2 { font-size:16px; margin:0 0 10px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; margin-bottom:14px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input, button, textarea { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  button { background:var(--accent); color:#fff; border:0; cursor:pointer; }
+  table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; } code { font-size:12px; word-break:break-all; }
+  .muted { color:var(--muted); } .ok { color:var(--ok); } .bad { color:var(--bad); }
+  .scroll { overflow-x:auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>MediathekArr Rulesets</h1>
+
+  <section>
+    <h2>Status</h2>
+    <div id="status" class="muted">lädt …</div>
+    <p class="muted">MediathekArr nutzt diesen Dienst mit <code>MEDIATHEKARR_RULESETS_URL=<span id="selfurl"></span>/api/v1/rulesets</code></p>
+  </section>
+
+  <section>
+    <h2>Rulesets erzeugen</h2>
+    <div class="row">
+      <input id="key" type="password" placeholder="API-Key" size="18">
+      <input id="ids" placeholder="TVDB-IDs oder Namen, kommagetrennt" size="40">
+      <label><input id="sonarr" type="checkbox"> alle aus Sonarr</label>
+      <label><input id="force" type="checkbox"> vorhandene neu erzeugen</label>
+      <button id="gen">Starten</button>
+      <button id="imp">Von pcjones.de &amp; Rundfunkarr importieren</button>
+    </div>
+    <p id="genout" class="muted"></p>
+  </section>
+
+  <section>
+    <h2>Letzte Läufe</h2>
+    <div class="scroll"><table id="log"><thead><tr><th>Serie</th><th>Status</th><th>Ergebnis</th><th>Zeit</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section>
+    <h2>Rulesets</h2>
+    <div class="row"><input id="filter" placeholder="Filtern nach Serie oder Thema" size="40"></div>
+    <div class="scroll"><table id="rs"><thead><tr><th>Serie</th><th>Thema</th><th>Strategie</th><th>Regeln</th><th>Quelle</th></tr></thead><tbody></tbody></table></div>
+  </section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let rulesets = [];
+try { $("#key").value = localStorage.getItem("rulesetsKey") || ""; } catch {}
+$("#selfurl").textContent = location.origin;
+
+async function load() {
+  const [st, health, log, rs] = await Promise.all(["/api/settings", "/health", "/api/generation-log", "/api/rulesets"].map(u => fetch(u).then(r => r.json())));
+  const yes = (b, t) => `<span class="${b ? "ok" : "muted"}">${b ? "✓" : "–"} ${t}</span>`;
+  $("#status").innerHTML = [`${health.rulesets} Rulesets`, yes(st.writable, "Schreibzugriff"), yes(st.llm, "KI " + (st.llmModel || "")),
+    yes(st.tvdbDirect, "TVDB-Key"), yes(st.sonarr, "Sonarr"), st.remoteTarget ? "Ziel: " + esc(st.remoteTarget) : ""].filter(Boolean).join(" · ");
+  $("#log tbody").innerHTML = log.slice(0, 50).map(l => `<tr><td>${esc(l.name)} <span class="muted">${l.tvdbId}</span></td>
+    <td class="${l.status === "ok" ? "ok" : "bad"}">${esc(l.status)}</td><td>${esc(l.message)}</td><td class="muted">${esc(l.attempted_at)}</td></tr>`).join("")
+    || `<tr><td colspan="4" class="muted">noch keine</td></tr>`;
+  rulesets = rs; render();
+}
+
+function render() {
+  const f = $("#filter").value.toLowerCase();
+  const rows = rulesets.filter(r => !f || (r.mediaName + " " + r.topic).toLowerCase().includes(f)).slice(0, 500);
+  $("#rs tbody").innerHTML = rows.map(r => `<tr><td>${esc(r.mediaName)} <span class="muted">${r.tvdbId ?? ""}</span></td><td>${esc(r.topic)}</td>
+    <td>${esc(r.matchingStrategy)}</td><td><code>${esc([r.seasonRegex, r.episodeRegex].filter(Boolean).join("  "))} ${r.titleRegexRules !== "[]" ? esc(r.titleRegexRules) : ""} ${r.filters !== "[]" ? esc(r.filters) : ""}</code></td>
+    <td class="muted">${esc(r.source)}${r.match_rate != null ? " " + Math.round(r.match_rate * 100) + "%" : ""}</td></tr>`).join("");
+}
+
+async function post(url, body) {
+  const key = $("#key").value; try { localStorage.setItem("rulesetsKey", key); } catch {}
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Api-Key": key }, body: body ? JSON.stringify(body) : undefined });
+  const data = await r.json().catch(() => ({}));
+  $("#genout").textContent = r.ok ? JSON.stringify(data) : (data.detail || r.statusText);
+  return r.ok;
+}
+
+$("#gen").onclick = async () => {
+  const parts = $("#ids").value.split(",").map(s => s.trim()).filter(Boolean);
+  const body = { tvdbIds: parts.filter(p => /^\d+$/.test(p)).map(Number), names: parts.filter(p => !/^\d+$/.test(p)), sonarr: $("#sonarr").checked, force: $("#force").checked };
+  if (await post("/api/generate", body)) setTimeout(load, 5000);
+};
+$("#imp").onclick = async () => { if (await post("/api/import/upstream")) load(); };
+$("#filter").oninput = render;
+load();
+</script>
+</body>
+</html>

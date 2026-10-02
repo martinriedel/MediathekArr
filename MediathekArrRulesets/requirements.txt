@@ -1,0 +1,4 @@
+fastapi==0.142.2
+uvicorn==0.50.2
+httpx==0.28.1
+regex==2026.9.29
