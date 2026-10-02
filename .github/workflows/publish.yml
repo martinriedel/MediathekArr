@@ -2,7 +2,7 @@ name: Publish images
 
 # Pushes Docker images to GitHub Container Registry (ghcr.io):
 #   main            -> :latest and :main
-#   any other branch -> :<branch-name> (slashes become dashes), for testing before merge
+#   any other branch -> :dev (newest branch build) and :<branch-name> (slashes become dashes)
 #   tag v1.2.3      -> :1.2.3
 on:
   push:
@@ -49,6 +49,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=dev,enable=${{ github.ref_type == 'branch' && github.ref_name != github.event.repository.default_branch }}
             type=semver,pattern={{version}}
 
       - uses: docker/build-push-action@v6
