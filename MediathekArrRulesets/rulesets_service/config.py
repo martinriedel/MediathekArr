@@ -22,6 +22,10 @@ def _float(name: str, default: float) -> float:
         return default
 
 
+DEFAULT_DISCOVER_CHANNELS = ("ARD,ZDF,3Sat,ARTE.DE,BR,HR,MDR,NDR,rbb,Radio Bremen TV,SR,SWR,WDR,PHOENIX,"
+                             "KiKA,ZDF-tivi,ARD-alpha,ONE,tagesschau24,Funk.net,DW,ORF,SRF")
+
+
 def _str(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
@@ -47,11 +51,13 @@ class Settings:
     generate_interval_hours: float = 0
     retry_failed_after_hours: float = 72
     discover_interval_hours: float = 24
-    discover_items: int = 5000
+    discover_items: int = 0
     discover_min_items: int = 3
     discover_min_minutes: int = 10
-    discover_max_topics: int = 50
+    discover_max_topics: int = 200
     discover_min_name_score: float = 0.85
+    discover_retry_no_match_days: float = 30
+    discover_channels: tuple[str, ...] = tuple(DEFAULT_DISCOVER_CHANNELS.split(","))
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -76,9 +82,11 @@ class Settings:
             generate_interval_hours=_float("GENERATE_INTERVAL_HOURS", 0),
             retry_failed_after_hours=_float("RETRY_FAILED_AFTER_HOURS", 72),
             discover_interval_hours=_float("DISCOVER_INTERVAL_HOURS", 24),
-            discover_items=int(_float("DISCOVER_ITEMS", 5000)),
+            discover_items=int(_float("DISCOVER_ITEMS", 0)),
             discover_min_items=int(_float("DISCOVER_MIN_ITEMS", 3)),
             discover_min_minutes=int(_float("DISCOVER_MIN_MINUTES", 10)),
-            discover_max_topics=int(_float("DISCOVER_MAX_TOPICS", 50)),
+            discover_max_topics=int(_float("DISCOVER_MAX_TOPICS", 200)),
             discover_min_name_score=_float("DISCOVER_MIN_NAME_SCORE", 0.85),
+            discover_retry_no_match_days=_float("DISCOVER_RETRY_NO_MATCH_DAYS", 30),
+            discover_channels=tuple(c.strip() for c in _str("DISCOVER_CHANNELS", DEFAULT_DISCOVER_CHANNELS).split(",") if c.strip()),
         )

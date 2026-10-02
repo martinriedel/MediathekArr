@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
@@ -24,24 +24,32 @@ def _client() -> httpx.Client:
 
 # ---------------- MediathekView ----------------
 
-def mediathekview_query(queries: list[dict[str, Any]], max_size: int = 1000) -> list[Item]:
-    results: list[Item] = []
+def mediathekview_pages(queries: list[dict[str, Any]], max_size: int = 1000, duration_min: int | None = None,
+                        pause: float = 0.0) -> Iterator[list[Item]]:
+    """Newest entries first, page by page. max_size 0 walks the whole catalogue."""
     offset = 0
     with _client() as c:
-        while len(results) < max_size:
-            size = min(1000, max_size - len(results))
-            body = {"queries": queries, "sortBy": "filmlisteTimestamp", "sortOrder": "desc",
-                    "future": True, "offset": offset, "size": size}
+        while not max_size or offset < max_size:
+            size = 1000 if not max_size else min(1000, max_size - offset)
+            body: dict[str, Any] = {"queries": queries, "sortBy": "filmlisteTimestamp", "sortOrder": "desc",
+                                    "future": True, "offset": offset, "size": size}
+            if duration_min:
+                body["duration_min"] = duration_min
             r = c.post(MEDIATHEKVIEW_URL, content=json.dumps(body), headers={"Content-Type": "text/plain"})
             if r.status_code != 200:
                 log.warning("MediathekView query failed: %s %s", r.status_code, r.text[:200])
-                break
+                return
             page = (r.json().get("result") or {}).get("results") or []
-            results.extend(Item.from_api(x) for x in page)
+            yield [Item.from_api(x) for x in page]
             if len(page) < size:
-                break
+                return
             offset += size
-    return results
+            if pause:
+                time.sleep(pause)
+
+
+def mediathekview_query(queries: list[dict[str, Any]], max_size: int = 1000) -> list[Item]:
+    return [it for page in mediathekview_pages(queries, max_size) for it in page]
 
 
 def search_query_for(show: Show) -> str:

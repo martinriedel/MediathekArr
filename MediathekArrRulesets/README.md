@@ -66,15 +66,18 @@ edited rulesets are never touched.
 
 With `TVDB_API_KEY` set, the service finds new shows on its own, no show list needed:
 
-1. Every `DISCOVER_INTERVAL_HOURS` (default 24) it loads the newest `DISCOVER_ITEMS` MediathekView entries.
-2. It groups them by topic and keeps topics that look like a series (at least `DISCOVER_MIN_ITEMS` entries of
-   `DISCOVER_MIN_MINUTES` or longer) and are not covered by any ruleset yet.
+1. Every `DISCOVER_INTERVAL_HOURS` (default 24) it walks the whole MediathekView catalogue, channel by channel
+   (`DISCOVER_CHANNELS`), newest first, page by page with a short pause, and only asks for entries of at least
+   `DISCOVER_MIN_MINUTES`. `DISCOVER_ITEMS` limits the walk to the newest N entries per channel (0 = everything).
+2. It counts entries per topic and keeps topics that look like a series (at least `DISCOVER_MIN_ITEMS` entries) and
+   are not covered by any ruleset yet, biggest first.
 3. It searches each topic on TVDB and takes the hit whose name (any language or alias) is close enough
    (`DISCOVER_MIN_NAME_SCORE`).
 4. The generator builds and validates a ruleset for that show as usual (patterns first, then the LLM).
 
-At most `DISCOVER_MAX_TOPICS` new topics are handled per run; topics without a TVDB match or a working ruleset are
-retried after `RETRY_FAILED_AFTER_HOURS`. Results show up under "Entdeckte Themen" on the overview page. Start a run
+At most `DISCOVER_MAX_TOPICS` new topics are handled per run, so the backlog is worked off over a few days. Topics
+without a working ruleset are retried after `RETRY_FAILED_AFTER_HOURS`, topics without a TVDB match after
+`DISCOVER_RETRY_NO_MATCH_DAYS`. Results show up under "Entdeckte Themen" on the overview page. Start a run
 by hand with the button there or `python -m rulesets_service discover [--dry-run]`. Set `DISCOVER_INTERVAL_HOURS=0`
 to turn the schedule off. Sonarr and `--tvdb-id`/`--name` remain available for shows discovery does not catch.
 
@@ -121,8 +124,10 @@ server rejects it; answers from reasoning models (`<think>...</think>`) are hand
 | `SONARR_URL`, `SONARR_API_KEY` | – | Show list for `--sonarr` and the schedule |
 | `GENERATE_INTERVAL_HOURS` | `0` | Run the generator for all Sonarr shows periodically |
 | `DISCOVER_INTERVAL_HOURS` | `24` | Discovery schedule (needs `TVDB_API_KEY`; `0` = off) |
-| `DISCOVER_ITEMS`, `DISCOVER_MIN_ITEMS`, `DISCOVER_MIN_MINUTES` | `5000`, `3`, `10` | How many newest entries to scan, and what counts as a series topic |
-| `DISCOVER_MAX_TOPICS`, `DISCOVER_MIN_NAME_SCORE` | `50`, `0.85` | New topics per run; how close the TVDB name must be (0–1) |
+| `DISCOVER_ITEMS`, `DISCOVER_MIN_ITEMS`, `DISCOVER_MIN_MINUTES` | `0`, `3`, `10` | How many newest entries to scan (0 = whole catalogue), and what counts as a series topic |
+| `DISCOVER_MAX_TOPICS`, `DISCOVER_MIN_NAME_SCORE` | `200`, `0.85` | New topics per run; how close the TVDB name must be (0–1) |
+| `DISCOVER_CHANNELS` | ARD, ZDF, 3Sat, ARTE.DE, the ARD regional channels, KiKA, ... | Channels discovery walks, comma-separated |
+| `DISCOVER_RETRY_NO_MATCH_DAYS` | `30` | When to search TVDB again for a topic that had no match |
 | `GENERATOR_TARGET_URL`, `GENERATOR_TARGET_API_KEY` | – | Upload results to another instance instead of the local database |
 
 ## API
