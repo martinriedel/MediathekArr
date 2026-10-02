@@ -1,3 +1,4 @@
+import pytest
 from conftest import make_items
 
 from rulesets_service.generator import candidate_topics, generate
@@ -97,13 +98,14 @@ def test_discovery_finds_topic_and_generates(show, monkeypatch, tmp_path):
 
     db = Database(":memory:")
     s = Settings(min_match_rate=0.8, tvdb_api_key="k", discover_items=100, discover_min_items=3,
-                 discover_min_minutes=10, discover_max_topics=10, discover_min_name_score=0.85,
+                 discover_min_minutes=10, discover_max_topics=10, discover_min_name_score=0.85, discover_channels=("A", "B"),
                  retry_failed_after_hours=72)
     r = runner_mod.Runner(s, db)
     items = make_items(show, "{name} (S{s:02d}/E{e:02d})")
     noise = [Item(topic="Nachrichten", title=f"Kurz {i}", duration=120, url_video=f"n{i}") for i in range(10)]
     unknown = [Item(topic="Unbekannte Doku", title=f"Teil {i}", duration=1800, url_video=f"u{i}") for i in range(5)]
-    monkeypatch.setattr(disc_mod, "mediathekview_query", lambda q, n: items + noise + unknown)
+    all_items = items + noise + unknown
+    monkeypatch.setattr(disc_mod, "mediathekview_pages", lambda q, n, **kw: iter([all_items[:7], all_items[7:]]))  # both channels return the same entries: counted once
     monkeypatch.setattr(r.shows, "search", lambda name: [{"tvdb_id": 4711, "name": "Testserie", "translations": {}, "aliases": []}]
                         if name == "Testserie" else [{"tvdb_id": 1, "name": "Etwas ganz anderes", "translations": {}, "aliases": []}])
     monkeypatch.setattr(r.shows, "get_show", lambda tid: show)
@@ -114,6 +116,31 @@ def test_discovery_finds_topic_and_generates(show, monkeypatch, tmp_path):
     assert res == {"Testserie": "ok", "Unbekannte Doku": "no_match"}  # short news clips are not a series
     assert db.list_rulesets(tvdb_id=4711)
     assert d.run() == []  # covered topic and recent no_match are not retried
+    assert [x["topic"] for x in d.run(full=True)] == ["Unbekannte Doku"]  # a full scan retries no_match, not covered topics
+
+    d._lock.acquire()
+    with pytest.raises(RuntimeError):
+        d.run()  # only one run at a time
+    d._lock.release()
+
+
+def test_mediathekview_pages_walks_whole_catalogue(monkeypatch):
+    import json
+
+    import httpx
+    from rulesets_service import sources
+    bodies = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        bodies.append(body)
+        n = body["size"] if body["offset"] < 2000 else 3
+        return httpx.Response(200, json={"result": {"results": [{"topic": "T", "title": str(i), "duration": 900} for i in range(n)]}})
+    monkeypatch.setattr(sources, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    pages = list(sources.mediathekview_pages([], 0, duration_min=600))
+    assert [len(p) for p in pages] == [1000, 1000, 3]
+    assert [b["offset"] for b in bodies] == [0, 1000, 2000] and bodies[0]["duration_min"] == 600
+    assert sum(len(p) for p in sources.mediathekview_pages([], 1500)) == 1500
 
 
 def test_best_tvdb_match_uses_translations():

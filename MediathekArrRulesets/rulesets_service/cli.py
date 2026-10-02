@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
 
     disc = sub.add_parser("discover", help="neue Serien in MediathekView finden und Rulesets erzeugen (braucht TVDB_API_KEY)")
     disc.add_argument("--max-topics", type=int, help="höchstens so viele neue Themen pro Lauf")
+    disc.add_argument("--full", action="store_true", help="kompletter Scan: ganze Mediathek, ohne Themen-Limit, auch frühere Fehlschläge neu versuchen")
     disc.add_argument("--dry-run", action="store_true", help="nur anzeigen, nichts speichern")
 
     sub.add_parser("export", help="alle Daten als JSON ausgeben")
@@ -61,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     runner = Runner(settings, db)
     if args.cmd == "discover":
         from .discovery import Discovery
-        for r in Discovery(settings, db, runner).run(args.max_topics, dry_run=args.dry_run):
+        for r in Discovery(settings, db, runner).run(args.max_topics, dry_run=args.dry_run, full=args.full):
             print(json.dumps(r, ensure_ascii=False))
         return 0
 

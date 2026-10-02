@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
@@ -24,24 +24,32 @@ def _client() -> httpx.Client:
 
 # ---------------- MediathekView ----------------
 
-def mediathekview_query(queries: list[dict[str, Any]], max_size: int = 1000) -> list[Item]:
-    results: list[Item] = []
+def mediathekview_pages(queries: list[dict[str, Any]], max_size: int = 1000, duration_min: int | None = None,
+                        pause: float = 0.0) -> Iterator[list[Item]]:
+    """Newest entries first, page by page. max_size 0 walks the whole catalogue."""
     offset = 0
     with _client() as c:
-        while len(results) < max_size:
-            size = min(1000, max_size - len(results))
-            body = {"queries": queries, "sortBy": "filmlisteTimestamp", "sortOrder": "desc",
-                    "future": True, "offset": offset, "size": size}
+        while not max_size or offset < max_size:
+            size = 1000 if not max_size else min(1000, max_size - offset)
+            body: dict[str, Any] = {"queries": queries, "sortBy": "filmlisteTimestamp", "sortOrder": "desc",
+                                    "future": True, "offset": offset, "size": size}
+            if duration_min:
+                body["duration_min"] = duration_min
             r = c.post(MEDIATHEKVIEW_URL, content=json.dumps(body), headers={"Content-Type": "text/plain"})
             if r.status_code != 200:
                 log.warning("MediathekView query failed: %s %s", r.status_code, r.text[:200])
-                break
+                return
             page = (r.json().get("result") or {}).get("results") or []
-            results.extend(Item.from_api(x) for x in page)
+            yield [Item.from_api(x) for x in page]
             if len(page) < size:
-                break
+                return
             offset += size
-    return results
+            if pause:
+                time.sleep(pause)
+
+
+def mediathekview_query(queries: list[dict[str, Any]], max_size: int = 1000) -> list[Item]:
+    return [it for page in mediathekview_pages(queries, max_size) for it in page]
 
 
 def search_query_for(show: Show) -> str:
@@ -85,6 +93,7 @@ class ShowSource:
         self._token: str | None = None
         self._token_at = 0.0
         self._cache: dict[int, Show] = {}
+        self._payloads: dict[int, tuple[float, dict[str, Any]]] = {}
 
     @property
     def can_search(self) -> bool:
@@ -126,6 +135,14 @@ class ShowSource:
         return Show.from_api(data["data"])
 
     def _get_show_tvdb(self, tvdb_id: int) -> Show | None:
+        payload = self.show_payload(tvdb_id)
+        return Show.from_api(payload) if payload else None
+
+    def show_payload(self, tvdb_id: int) -> dict[str, Any] | None:
+        """The `data` object of get_show.php, built from TVDB directly (needs TVDB_API_KEY); cached for 12 h."""
+        cached = self._payloads.get(tvdb_id)
+        if cached and time.time() - cached[0] < 12 * 3600:
+            return cached[1]
         series = self._tvdb_get(f"/series/{tvdb_id}/extended", {"meta": "episodes", "short": "true"}).get("data")
         if not series:
             return None
@@ -134,19 +151,22 @@ class ShowSource:
             german = self._tvdb_get(f"/series/{tvdb_id}/translations/deu").get("data", {}).get("name") or german
         except httpx.HTTPError:
             pass
-        aliases = [a for a in series.get("aliases") or [] if isinstance(a, dict) and a.get("language") == "deu"]
-        return Show.from_api({
+        aliases = [{"language": a["language"], "name": a.get("name") or ""}
+                   for a in series.get("aliases") or [] if isinstance(a, dict) and a.get("language") == "deu"]
+        payload = {
             "id": tvdb_id,
             "name": series.get("name") or german,
             "german_name": german,
             "aliases": aliases,
             "episodes": [
                 {"name": e.get("name"), "aired": e.get("aired"), "runtime": e.get("runtime"),
-                 "seasonNumber": e.get("seasonNumber"), "episodeNumber": e.get("number"),
+                 "seasonNumber": e.get("seasonNumber") or 0, "episodeNumber": e.get("number") or 0,
                  "absoluteNumber": e.get("absoluteNumber")}
                 for e in series.get("episodes") or []
             ],
-        })
+        }
+        self._payloads[tvdb_id] = (time.time(), payload)
+        return payload
 
     def search(self, name: str) -> list[dict[str, Any]]:
         """Find series on TVDB by name (needs TVDB_API_KEY). Returns [{tvdb_id, name, year}]."""

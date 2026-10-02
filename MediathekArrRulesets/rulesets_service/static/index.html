@@ -27,7 +27,7 @@
   <section>
     <h2>Status</h2>
     <div id="status" class="muted">lädt …</div>
-    <p class="muted">MediathekArr nutzt diesen Dienst mit <code>MEDIATHEKARR_RULESETS_URL=<span id="selfurl"></span>/api/v1/rulesets</code></p>
+    <p class="muted">MediathekArr nutzt diesen Dienst mit <code>MEDIATHEKARR_RULESETS_URL=<span class="selfurl"></span>/api/v1/rulesets</code> und, mit TVDB-Key, <code>MEDIATHEKARR_API_BASE_URL=<span class="selfurl"></span>/api/v1</code></p>
   </section>
 
   <section>
@@ -39,6 +39,7 @@
       <label><input id="force" type="checkbox"> vorhandene neu erzeugen</label>
       <button id="gen">Starten</button>
       <button id="disc">Neue Serien entdecken</button>
+      <button id="discfull" title="Ganze Mediathek, ohne Themen-Limit, auch frühere Fehlschläge neu versuchen. Kann Stunden dauern.">Kompletter Scan</button>
       <button id="imp">Von pcjones.de &amp; Rundfunkarr importieren</button>
     </div>
     <p id="genout" class="muted"></p>
@@ -65,13 +66,13 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 let rulesets = [];
 try { $("#key").value = localStorage.getItem("rulesetsKey") || ""; } catch {}
-$("#selfurl").textContent = location.origin;
+document.querySelectorAll(".selfurl").forEach(e => e.textContent = location.origin);
 
 async function load() {
   const [st, health, log, rs, disc] = await Promise.all(["/api/settings", "/health", "/api/generation-log", "/api/rulesets", "/api/discovery-log"].map(u => fetch(u).then(r => r.json())));
   const yes = (b, t) => `<span class="${b ? "ok" : "muted"}">${b ? "✓" : "–"} ${t}</span>`;
   $("#status").innerHTML = [`${health.rulesets} Rulesets`, yes(st.writable, "Schreibzugriff"), yes(st.llm, "KI " + (st.llmModel || "")),
-    yes(st.tvdbDirect, "TVDB-Key"), yes(st.sonarr, "Sonarr"), yes(st.discovery, "Entdeckung" + (st.discovery ? " alle " + st.discoverIntervalHours + " h" : "")), st.remoteTarget ? "Ziel: " + esc(st.remoteTarget) : ""].filter(Boolean).join(" · ");
+    yes(st.tvdbDirect, "TVDB-Key"), yes(st.sonarr, "Sonarr"), yes(st.discovery, "Entdeckung" + (st.discovery ? " alle " + st.discoverIntervalHours + " h" : "")), st.discoveryRunning ? "Entdeckung läuft …" : "", st.remoteTarget ? "Ziel: " + esc(st.remoteTarget) : ""].filter(Boolean).join(" · ");
   $("#log tbody").innerHTML = log.slice(0, 50).map(l => `<tr><td>${esc(l.name)} <span class="muted">${l.tvdbId}</span></td>
     <td class="${l.status === "ok" ? "ok" : "bad"}">${esc(l.status)}</td><td>${esc(l.message)}</td><td class="muted">${esc(l.attempted_at)}</td></tr>`).join("")
     || `<tr><td colspan="4" class="muted">noch keine</td></tr>`;
@@ -103,6 +104,9 @@ $("#gen").onclick = async () => {
   if (await post("/api/generate", body)) setTimeout(load, 5000);
 };
 $("#disc").onclick = async () => { if (await post("/api/discover")) setTimeout(load, 10000); };
+$("#discfull").onclick = async () => {
+  if (confirm("Kompletten Scan starten? Er geht die ganze Mediathek durch und kann Stunden dauern.") && await post("/api/discover?full=true")) setTimeout(load, 10000);
+};
 $("#imp").onclick = async () => { if (await post("/api/import/upstream")) load(); };
 $("#filter").oninput = render;
 load();

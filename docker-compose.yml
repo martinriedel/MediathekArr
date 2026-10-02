@@ -18,6 +18,8 @@ services:
       - MEDIATHEKARR_API_BASE_URL=https://mediathekarr.pcjones.de/api/v1
       # Use your own rulesets (see the mediathekarr-rulesets service below)
       #- MEDIATHEKARR_RULESETS_URL=http://mediathekarr-rulesets:5008/api/v1/rulesets
+      # ...and its show data from TVDB (needs TVDB_API_KEY on the ruleset service) instead of pcjones.de
+      #- MEDIATHEKARR_API_BASE_URL=http://mediathekarr-rulesets:5008/api/v1
     volumes:
       - /docker/appdata/mediathekarr:/app/config
       - /data/mediathek/complete:/data/mediathek/complete

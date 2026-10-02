@@ -1,18 +1,19 @@
-"""Finds shows on its own: walks the newest MediathekView entries, groups them by topic, looks each
+"""Finds shows on its own: walks the MediathekView catalogue (newest first), groups the entries by topic, looks each
 uncovered topic up on TVDB and hands the match to the generator. Needs TVDB_API_KEY for the search."""
 from __future__ import annotations
 
 import difflib
 import logging
+import threading
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Iterable
 
 from .config import Settings
 from .db import Database
 from .matcher import Item, format_title, should_skip_item
 from .runner import Runner
-from .sources import mediathekview_query
+from .sources import mediathekview_pages
 
 log = logging.getLogger(__name__)
 
@@ -21,18 +22,20 @@ def _norm(s: str | None) -> str:
     return format_title((s or "").split("(")[0]).casefold().replace(".", " ").replace("-", " ").strip()
 
 
-def candidate_topics(items: list[Item], min_items: int, min_minutes: int) -> list[tuple[str, int]]:
-    """Topics that look like a series: several entries of programme length. Returns [(topic, count)], biggest first."""
-    by_topic: dict[str, list[Item]] = defaultdict(list)
+def count_topics(items: Iterable[Item], min_minutes: int, counts: dict[str, int]) -> None:
+    """Add each topic's programme-length entries to counts (pages can be fed one by one)."""
     for it in items:
-        if it.topic and not should_skip_item(it):
-            by_topic[it.topic].append(it)
-    out = []
-    for topic, its in by_topic.items():
-        long_enough = [it for it in its if it.duration >= min_minutes * 60]
-        if len(long_enough) >= min_items:
-            out.append((topic, len(long_enough)))
-    return sorted(out, key=lambda t: -t[1])
+        if it.topic and it.duration >= min_minutes * 60 and not should_skip_item(it):
+            counts[it.topic] += 1
+
+
+def candidate_topics(items: Iterable[Item], min_items: int, min_minutes: int,
+                     counts: dict[str, int] | None = None) -> list[tuple[str, int]]:
+    """Topics that look like a series: several entries of programme length. Returns [(topic, count)], biggest first."""
+    if counts is None:
+        counts = defaultdict(int)
+        count_topics(items, min_minutes, counts)
+    return sorted(((t, n) for t, n in counts.items() if n >= min_items), key=lambda t: -t[1])
 
 
 def best_tvdb_match(topic: str, hits: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, float]:
@@ -52,27 +55,63 @@ class Discovery:
         self.s = settings
         self.db = db
         self.runner = runner
+        self._lock = threading.Lock()
+
+    @property
+    def running(self) -> bool:
+        return self._lock.locked()
 
     def _covered_topics(self) -> set[str]:
         return {t.strip() for r in self.db.list_rulesets() for t in r["topic"].split("|") if t.strip()}
 
-    def _recently_tried(self, topic: str) -> bool:
+    def _recently_tried(self, topic: str, full: bool = False) -> bool:
         last = self.db.last_discovery(topic)
-        if not last or last["status"] == "ok":
+        if not last or last["status"] in ("ok", "covered"):
             return bool(last)
+        if full:
+            return False
         when = datetime.fromisoformat(last["attempted_at"])
-        return datetime.now(timezone.utc) - when < timedelta(hours=self.s.retry_failed_after_hours)
+        wait = (timedelta(days=self.s.discover_retry_no_match_days) if last["status"] == "no_match"
+                else timedelta(hours=self.s.retry_failed_after_hours))
+        return datetime.now(timezone.utc) - when < wait
 
-    def run(self, max_topics: int | None = None, dry_run: bool = False) -> list[dict[str, Any]]:
+    def run(self, max_topics: int | None = None, dry_run: bool = False, full: bool = False) -> list[dict[str, Any]]:
+        """full: whole catalogue, no topic limit, and topics that failed or had no TVDB match are tried again."""
         if not self.runner.shows.can_search:
             raise RuntimeError("Entdeckung braucht TVDB_API_KEY für die Suche nach Seriennamen")
-        items = mediathekview_query([], self.s.discover_items)
+        if not self._lock.acquire(blocking=False):
+            raise RuntimeError("Entdeckung läuft bereits")
+        try:
+            return self._run(max_topics, dry_run, full)
+        finally:
+            self._lock.release()
+
+    def _run(self, max_topics: int | None, dry_run: bool, full: bool) -> list[dict[str, Any]]:
+        limit_items = 0 if full else self.s.discover_items
+        counts: dict[str, int] = defaultdict(int)
+        seen: set[str] = set()
+        # one walk per channel, because the search API only pages through a limited window per query;
+        # only programme-length entries, and a short pause between pages keeps the load on mediathekviewweb.de low
+        for channel in self.s.discover_channels:
+            query = [{"fields": ["channel"], "query": channel}]
+            for page in mediathekview_pages(query, limit_items, duration_min=self.s.discover_min_minutes * 60, pause=0.5):
+                fresh = []
+                for it in page:
+                    key = it.url_video or f"{it.channel}|{it.topic}|{it.title}|{it.timestamp}"
+                    if key not in seen:
+                        seen.add(key)
+                        fresh.append(it)
+                count_topics(fresh, self.s.discover_min_minutes, counts)
         covered = self._covered_topics()
-        todo = [(t, n) for t, n in candidate_topics(items, self.s.discover_min_items, self.s.discover_min_minutes)
-                if t not in covered and not self._recently_tried(t)]
-        log.info("Entdeckung: %d Einträge, %d neue Themen", len(items), len(todo))
+        todo = [(t, n) for t, n in candidate_topics([], self.s.discover_min_items, self.s.discover_min_minutes, counts)
+                if t not in covered and not self._recently_tried(t, full)]
+        log.info("Entdeckung%s: %d Einträge, %d Themen, %d neu", " (komplett)" if full else "", len(seen), len(counts), len(todo))
+        if not full:
+            todo = todo[: max_topics or self.s.discover_max_topics]
+        elif max_topics:
+            todo = todo[:max_topics]
         results = []
-        for topic, count in todo[: max_topics or self.s.discover_max_topics]:
+        for topic, count in todo:
             results.append(self._one(topic, count, dry_run))
         return results
 
