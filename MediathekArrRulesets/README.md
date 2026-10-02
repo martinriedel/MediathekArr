@@ -61,6 +61,33 @@ Shows that already have rulesets are skipped unless `--force`; shows that failed
 `RETRY_FAILED_AFTER_HOURS`. Generated rulesets replace earlier generated ones for that show; imported and manually
 edited rulesets are never touched.
 
+## LLM
+
+One integration is built in: the OpenAI-compatible chat API (`/v1/chat/completions`). Practically every local
+runtime offers it, so you only set three variables:
+
+| Runtime | `LLM_BASE_URL` | `LLM_MODEL` | `LLM_API_KEY` |
+|---|---|---|---|
+| Ollama | `http://<host>:11434/v1` | e.g. `qwen2.5:14b` | empty |
+| LM Studio | `http://<host>:1234/v1` | name of the loaded model | empty |
+| llama.cpp server | `http://<host>:8080/v1` | anything | empty |
+| vLLM, LocalAI, text-generation-webui | `http://<host>:<port>/v1` | model name | depends on setup |
+| Cloud (OpenAI, OpenRouter, ...) | provider URL | model name | your key |
+
+How it is used:
+
+1. The LLM is only asked when the built-in patterns find no ruleset that passes validation (`--force-llm` or
+   `forceLlm` skips the patterns).
+2. It gets the MediathekView titles (per topic, with channel, date and duration) and the TVDB episode list, and has
+   to answer with rulesets as JSON.
+3. Each proposal is validated with the MediathekArr matcher. If it fails, the LLM gets the unmatched and wrongly
+   matched entries back and tries again, up to `LLM_MAX_ATTEMPTS` (default 3).
+
+Without `LLM_BASE_URL` the service still works, using only the built-in patterns. A model that handles JSON and
+regular expressions well should be enough (an estimate, around 7–14B parameters); no specific model has been
+tested yet. The request asks for `response_format: json_object` and falls back to plain JSON prompting if the
+server rejects it; answers from reasoning models (`<think>...</think>`) are handled.
+
 ## Settings
 
 | Variable | Default | Meaning |
