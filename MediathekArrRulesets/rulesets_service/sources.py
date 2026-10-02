@@ -1,10 +1,12 @@
 """External data: MediathekView, TVDB, Sonarr and the upstream ruleset API."""
 from __future__ import annotations
 
+import codecs
 import json
 import logging
+import lzma
 import time
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 import httpx
 
@@ -50,6 +52,97 @@ def mediathekview_pages(queries: list[dict[str, Any]], max_size: int = 1000, dur
 
 def mediathekview_query(queries: list[dict[str, Any]], max_size: int = 1000) -> list[Item]:
     return [it for page in mediathekview_pages(queries, max_size) for it in page]
+
+
+FILMLISTE_URL = "https://liste.mediathekview.de/Filmliste-akt.xz"
+_DECODER = json.JSONDecoder()
+
+
+def _seconds(hms: str) -> int:
+    try:
+        parts = [int(p) for p in hms.split(":")]
+    except ValueError:
+        return 0
+    total = 0
+    for p in parts:
+        total = total * 60 + p
+    return total
+
+
+def parse_filmliste(text_chunks: Iterable[str]) -> Iterator[Item]:
+    """Entries of MediathekView's full film list, read piece by piece.
+
+    The file is one JSON object with repeated keys: two "Filmliste" rows (metadata, then column names) and one
+    "X" row per entry. An empty channel or topic means "same as the entry before"."""
+    cols: dict[str, int] = {}
+    channel = topic = ""
+    buf = ""
+    pos = 0
+    chunks = iter(text_chunks)
+    done = False
+    while True:
+        i = buf.find('"', pos)
+        key_end = buf.find('":', i + 1) if i >= 0 else -1
+        if i < 0 or key_end < 0:
+            if done:
+                return
+            buf = buf[pos:]
+            pos = 0
+            try:
+                buf += next(chunks)
+            except StopIteration:
+                done = True
+            continue
+        key = buf[i + 1:key_end]
+        start = key_end + 2
+        while start < len(buf) and buf[start] in " \r\n\t":
+            start += 1
+        try:
+            row, end = _DECODER.raw_decode(buf, start)
+        except ValueError:
+            if done:
+                return
+            try:
+                buf = buf[pos:] + next(chunks)
+            except StopIteration:
+                done = True
+            pos = 0
+            continue
+        pos = end
+        if not isinstance(row, list):
+            continue
+        if key == "Filmliste":
+            if "Sender" in row and "Thema" in row:
+                cols = {name: n for n, name in enumerate(row)}
+            continue
+        if key != "X":
+            continue
+
+        def col(name: str, default: int) -> str:
+            n = cols.get(name, default)
+            return str(row[n]) if n < len(row) and row[n] is not None else ""
+        channel = col("Sender", 0) or channel
+        topic = col("Thema", 1) or topic
+        try:
+            ts = int(col("DatumL", 16) or 0)
+        except ValueError:
+            ts = 0
+        yield Item(channel=channel, topic=topic.replace("–", "-"), title=col("Titel", 2).replace("–", "-"),
+                   description=col("Beschreibung", 7), timestamp=ts, duration=_seconds(col("Dauer", 5)),
+                   url_website=col("Website", 9), url_video=col("Url", 8))
+
+
+def filmliste_items(url: str = FILMLISTE_URL) -> Iterator[Item]:
+    """Download (xz-compressed) and parse the full film list without holding it in memory as a whole."""
+    def chunks() -> Iterator[str]:
+        dec = lzma.LZMADecompressor()
+        text = codecs.getincrementaldecoder("utf-8")(errors="replace")  # keeps characters split across chunks intact
+        with _client() as c, c.stream("GET", url, timeout=300) as r:
+            r.raise_for_status()
+            for raw in r.iter_bytes(1 << 20):
+                yield text.decode(dec.decompress(raw))
+            yield text.decode(b"", final=True)
+    return parse_filmliste(chunks())
 
 
 def search_query_for(show: Show) -> str:

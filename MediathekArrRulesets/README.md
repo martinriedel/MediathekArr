@@ -68,9 +68,11 @@ edited rulesets are never touched.
 
 With `TVDB_API_KEY` set, the service finds new shows on its own, no show list needed:
 
-1. Every `DISCOVER_INTERVAL_HOURS` (default 24) it walks the whole MediathekView catalogue, channel by channel
-   (`DISCOVER_CHANNELS`), newest first, page by page with a short pause, and only asks for entries of at least
-   `DISCOVER_MIN_MINUTES`. `DISCOVER_ITEMS` limits the walk to the newest N entries per channel (0 = everything).
+1. Every `DISCOVER_INTERVAL_HOURS` (default 24) it downloads MediathekView's complete film list
+   (`DISCOVER_FILMLISTE_URL`, every channel and every entry in one compressed file, read as a stream) and keeps entries
+   of at least `DISCOVER_MIN_MINUTES`. If the download fails it falls back to the search API of mediathekviewweb.de,
+   walked channel by channel (`DISCOVER_CHANNELS`; `DISCOVER_ITEMS` limits that walk per channel, 0 = everything).
+   `DISCOVER_SOURCE=api` uses the search API only.
 2. It counts entries per topic and keeps topics that look like a series (at least `DISCOVER_MIN_ITEMS` entries) and
    are not covered by any ruleset yet, biggest first.
 3. It searches each topic on TVDB and takes the hit whose name (any language or alias) is close enough
@@ -82,10 +84,16 @@ without a working ruleset are retried after `RETRY_FAILED_AFTER_HOURS`, topics w
 `DISCOVER_RETRY_NO_MATCH_DAYS`. Results show up under "Entdeckte Themen" on the overview page. Start a run
 by hand with the button there or `python -m rulesets_service discover [--dry-run]`.
 
-**Full scan:** "Kompletter Scan" on the overview page (`POST /api/discover?full=true`, CLI `discover --full`) walks the
-whole catalogue regardless of `DISCOVER_ITEMS`, handles every candidate topic without the `DISCOVER_MAX_TOPICS` limit
-and retries topics that failed or had no TVDB match before. It can take hours. Only one discovery run happens at a time. Set `DISCOVER_INTERVAL_HOURS=0`
+Each run only works on topics nothing has handled yet: topics with a ruleset and topics tried recently are skipped
+right away, and existing rulesets are not touched, since a ruleset is a pattern that also matches new episodes. After
+the first days a daily run is mostly the film list download plus the few new shows. Set `DISCOVER_INTERVAL_HOURS=0`
 to turn the schedule off. Sonarr and `--tvdb-id`/`--name` remain available for shows discovery does not catch.
+
+**Full scan:** "Kompletter Scan" on the overview page (`POST /api/discover?full=true`, CLI `discover --full`) runs only
+when started. It handles every candidate topic without the `DISCOVER_MAX_TOPICS` limit, retries topics that failed or
+had no TVDB match before, and checks every stored ruleset against the current entries: generated rulesets that map
+less than `MIN_MATCH_RATE` are generated anew (the old ones stay if that fails), imported or hand-made ones are only
+reported as `stale`. It can take hours. Only one discovery run happens at a time.
 
 ## LLM
 
@@ -132,7 +140,8 @@ server rejects it; answers from reasoning models (`<think>...</think>`) are hand
 | `DISCOVER_INTERVAL_HOURS` | `24` | Discovery schedule (needs `TVDB_API_KEY`; `0` = off) |
 | `DISCOVER_ITEMS`, `DISCOVER_MIN_ITEMS`, `DISCOVER_MIN_MINUTES` | `0`, `3`, `10` | How many newest entries to scan (0 = whole catalogue), and what counts as a series topic |
 | `DISCOVER_MAX_TOPICS`, `DISCOVER_MIN_NAME_SCORE` | `200`, `0.85` | New topics per run; how close the TVDB name must be (0–1) |
-| `DISCOVER_CHANNELS` | ARD, ZDF, 3Sat, ARTE.DE, the ARD regional channels, KiKA, ... | Channels discovery walks, comma-separated |
+| `DISCOVER_SOURCE`, `DISCOVER_FILMLISTE_URL` | `filmliste`, `https://liste.mediathekview.de/Filmliste-akt.xz` | Where discovery reads the catalogue (`api` = search API only) |
+| `DISCOVER_CHANNELS` | ARD, ZDF, 3Sat, ARTE.DE, the ARD regional channels, KiKA, ... | Channels the search API fallback walks, comma-separated |
 | `DISCOVER_RETRY_NO_MATCH_DAYS` | `30` | When to search TVDB again for a topic that had no match |
 | `GENERATOR_TARGET_URL`, `GENERATOR_TARGET_API_KEY` | – | Upload results to another instance instead of the local database |
 
