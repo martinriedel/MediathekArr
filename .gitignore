@@ -363,4 +363,8 @@ MigrationBackup/
 FodyWeavers.xsd
 
 # MediathekArr specifics
-tvdb_cache.sqlite
+config.json
+mediathekarr.json
+*.mp4
+*.mkv
+ffmpeg/

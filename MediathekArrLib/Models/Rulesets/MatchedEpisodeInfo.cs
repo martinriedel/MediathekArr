@@ -1,3 +1,3 @@
-﻿namespace MediathekArrLib.Models.Rulesets;
+﻿namespace MediathekArr.Models.Rulesets;
 
-public record MatchedEpisodeInfo(TvdbEpisode Episode, ApiResultItem Item, string ShowName, string MatchedTitle);
+public record MatchedEpisodeInfo(Tvdb.Episode Episode, ApiResultItem Item, string ShowName, string MatchedTitle);

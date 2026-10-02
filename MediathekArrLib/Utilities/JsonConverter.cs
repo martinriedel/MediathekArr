@@ -1,7 +1,7 @@
 ﻿using System.Text.Json.Serialization;
 using System.Text.Json;
 
-namespace MediathekArrLib.Utilities;
+namespace MediathekArr.Utilities;
 
 public class NumberOrEmptyConverter<T> : JsonConverter<T>
     where T : struct, IConvertible
@@ -56,5 +56,19 @@ public class NumberOrEmptyConverter<T> : JsonConverter<T>
     public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
     {
         writer.WriteNumberValue(Convert.ToDouble(value));
+    }
+}
+
+public class StringSanitizerConverter : JsonConverter<string>
+{
+    public override string Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var value = reader.GetString();
+        return value?.Replace('–', '-') ?? string.Empty;
+    }
+
+    public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(value);
     }
 }

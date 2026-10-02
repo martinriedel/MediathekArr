@@ -1,12 +1,12 @@
 ﻿using System.Text.Json.Serialization;
 
-namespace MediathekArr.Models;
+namespace MediathekArr.Models.SABnzbd;
 
-public class SabnzbdQueueItem
+public class QueueItem
 {
     [JsonPropertyName("status")]
     [JsonConverter(typeof(JsonStringEnumConverter))]
-    public SabnzbdDownloadStatus Status { get; set; }
+    public DownloadStatus Status { get; set; }
 
     [JsonPropertyName("index")]
     public int Index { get; set; }
@@ -33,5 +33,5 @@ public class SabnzbdQueueItem
     public string Percentage { get; set; } // "34"
 
     [JsonPropertyName("nzo_id")]
-    public string Id { get; set; } = System.Guid.NewGuid().ToString();
+    public string Id { get; set; } = Guid.NewGuid().ToString();
 }

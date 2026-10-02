@@ -1,16 +1,19 @@
 ﻿using MediathekArr.Models;
+using MediathekArr.Models.SABnzbd;
 using MediathekArr.Services;
 using Microsoft.AspNetCore.Mvc;
-using System.Reflection;
+using System.Text;
 using System.Text.RegularExpressions;
+using System.Web;
 
 namespace MediathekArr.Controllers;
 
 [ApiController]
 [Route("[controller]")]
-public partial class DownloadController(DownloadService downloadService) : ControllerBase
+public partial class DownloadController(DownloadService downloadService, Config config) : ControllerBase
 {
     private readonly DownloadService _downloadService = downloadService;
+    private readonly Config _config = config;
 
     [HttpGet("api")]
     public IActionResult GetVersion([FromQuery] string mode, [FromQuery] string? name = null, [FromQuery] string? value = null, [FromQuery] int? del_files = 0)
@@ -18,7 +21,9 @@ public partial class DownloadController(DownloadService downloadService) : Contr
         return mode switch
         {
             "version" => Ok(new { version = "4.3.3" }),
-            "get_config" => Content(GetConfigResponse(), "application/json"),
+            "get_config" => Content(ConfigResponse, "application/json"),
+            "fullstatus" => Content(FullStatusResponse, "application/json"),
+            "translate" => (value == "ping") ? Ok(new { value = "pong" }) : Ok(new { value = value }),
             "queue" => Ok(GetQueue()),
             "history" => (name == "delete" && !string.IsNullOrEmpty(value))
                 ? DeleteHistoryItem(value, del_files.GetValueOrDefault() == 1)
@@ -39,36 +44,108 @@ public partial class DownloadController(DownloadService downloadService) : Contr
     }
 
     [HttpPost("api")]
-    public async Task<IActionResult> AddFile([FromQuery] string mode, [FromQuery] string cat)
+    public async Task<IActionResult> AddFileEndpoint([FromQuery] string mode, [FromQuery] string cat, [FromQuery] string? name)
     {
-        if (mode != "addfile")
+        if (!_config.Categories.Contains(cat))
+        {
+            return BadRequest(new { error = "Invalid category" });
+        }
+
+        if (mode == "addfile")
+        {
+            return await AddFileByNzb(cat);
+        }
+        else if(mode == "addurl" && !string.IsNullOrWhiteSpace(name))
+        {
+            return await AddFileByUrl(cat, name);
+        }
+        else
         {
             return BadRequest(new { error = "Invalid mode" });
         }
 
+    }
+
+    private async Task<IActionResult> AddFileByUrl(string cat, string name)
+    {
+        var uri = new Uri(name);
+        var query = HttpUtility.ParseQueryString(uri.Query);
+        string? encodedVideoUrl = query["encodedVideoUrl"];
+        if (string.IsNullOrEmpty(encodedVideoUrl))
+        {
+            return BadRequest(new { error = "Missing encodedVideoUrl parameter" });
+        }
+
+        string encodedTitle = query["encodedTitle"]?.Trim() ?? string.Empty;
+        string encodedSubtitleUrl = query["encodedSubtitleUrl"] ?? string.Empty;
+        var base64EncodedBytesVideoUrl = Convert.FromBase64String(encodedVideoUrl);
+        string decodedVideoUrl = Encoding.UTF8.GetString(base64EncodedBytesVideoUrl);
+        var base64EncodedBytesTitle = Convert.FromBase64String(encodedTitle);
+        string decodedTitle = Encoding.UTF8.GetString(base64EncodedBytesTitle);
+        string decodedSubtitleUrl;
+        if (string.IsNullOrEmpty(encodedSubtitleUrl))
+        {
+            decodedSubtitleUrl = string.Empty;
+        }
+        else
+        {
+            var base64EncodedBytesSubtitleUrl = Convert.FromBase64String(encodedSubtitleUrl);
+            decodedSubtitleUrl = Encoding.UTF8.GetString(base64EncodedBytesSubtitleUrl);
+        }
+
+        if (!decodedVideoUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !decodedVideoUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new { error = "Invalid video URL scheme" });
+        }
+
+        if (!string.IsNullOrEmpty(decodedSubtitleUrl) &&
+            !decodedSubtitleUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !decodedSubtitleUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new { error = "Invalid subtitle URL scheme" });
+        }
+
+        var queueItem = _downloadService.AddToQueue(decodedVideoUrl, decodedSubtitleUrl, decodedTitle, cat);
+
+        return Ok(new
+        {
+            status = true,
+            nzo_ids = new[] { queueItem.Id }
+        });
+    }
+
+    private async Task<IActionResult> AddFileByNzb(string cat)
+    {
         // Read the fake NZB file from the request body
         using var reader = new StreamReader(Request.Body);
         var requestBody = await reader.ReadToEndAsync();
 
-        var filenameMatch = FileNameRegex().Match(requestBody);
-        var urlMatch = UrlRegex().Match(requestBody);
+        string[] lines = requestBody.Split(Environment.NewLine);
 
-        if (!filenameMatch.Success || !urlMatch.Success)
+        var filenameMatch = CommentRegex().Match(lines[6]);
+        var videoUrlMatch = CommentRegex().Match(lines[7]);
+        var subtitleUrlMatch = CommentRegex().Match(lines[8]);
+
+        if (!filenameMatch.Success || !videoUrlMatch.Success)
         {
             return BadRequest(new { error = "Invalid NZB format" });
         }
 
-        var fileName = filenameMatch.Groups[1].Value;
-        var downloadUrl = urlMatch.Groups[1].Value;
+        var fileName = Encoding.UTF8.GetString(Convert.FromBase64String(filenameMatch.Groups[1].Value.Trim()));
+        var videoDownloadUrl = Encoding.UTF8.GetString(Convert.FromBase64String(videoUrlMatch.Groups[1].Value.Trim()));
+        var subtitleDownloadUrl = subtitleUrlMatch.Success
+            ? Encoding.UTF8.GetString(Convert.FromBase64String(subtitleUrlMatch.Groups[1].Value.Trim()))
+            : string.Empty;
 
         // Add to the download queue using DownloadService and capture the created queue item
-        var queueItem = _downloadService.AddToQueue(downloadUrl, fileName, cat);
+        var queueItem = _downloadService.AddToQueue(videoDownloadUrl, subtitleDownloadUrl, fileName, cat);
 
         // Return response in the specified format
         return Ok(new
         {
             status = true,
-            nzo_ids = new[] { queueItem.Id}
+            nzo_ids = new[] { queueItem.Id }
         });
     }
 
@@ -76,7 +153,7 @@ public partial class DownloadController(DownloadService downloadService) : Contr
     {
         var queueItems = _downloadService.GetQueue();
 
-        var queue = new SabnzbdQueue
+        var queue = new Queue
         {
             Items = queueItems.ToList()
         };
@@ -89,11 +166,11 @@ public partial class DownloadController(DownloadService downloadService) : Contr
 
     private HistoryWrapper GetHistory()
     {
-        var historytems = _downloadService.GetHistory();
+        var historyItems = _downloadService.GetHistory();
 
-        var history = new SabnzbdHistory
+        var history = new History
         {
-            Items = historytems.ToList()
+            Items = historyItems.ToList()
         };
 
         return new HistoryWrapper
@@ -102,75 +179,53 @@ public partial class DownloadController(DownloadService downloadService) : Contr
         };
     }
 
-    private static string GetConfigResponse()
-    {
-        var startupPath = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? string.Empty;
-        var downloadFolderPathMapping = Environment.GetEnvironmentVariable("DOWNLOAD_FOLDER_PATH_MAPPING");
-
-        var completeDir = !string.IsNullOrEmpty(downloadFolderPathMapping)
-            ? Path.Combine(downloadFolderPathMapping)
-            : Path.Combine(startupPath, "downloads"); ;
-
-        return @$"{{
-        ""config"": {{
-            ""misc"": {{
-                ""complete_dir"": ""{completeDir.Replace("\\", "/")}"",
-                ""enable_tv_sorting"": false,
-                ""enable_movie_sorting"": false,
-                ""pre_check"": false,
-                ""history_retention"": ""all""
-            }},
-            ""categories"": [
-                {{
-                    ""name"": ""sonarr"",
-                    ""pp"": """",
-                    ""script"": ""Default"",
-                    ""dir"": """",
-                    ""priority"": -100
-                }},
-                {{
-                    ""name"": ""tv"",
-                    ""pp"": """",
-                    ""script"": ""Default"",
-                    ""dir"": """",
-                    ""priority"": -100
-                }},
-                {{
-                    ""name"": ""radarr"",
-                    ""pp"": """",
-                    ""script"": ""Default"",
-                    ""dir"": """",
-                    ""priority"": -100
-                }},
-                {{
-                    ""name"": ""movies"",
-                    ""pp"": """",
-                    ""script"": ""Default"",
-                    ""dir"": """",
-                    ""priority"": -100
-                }},
-                {{
-                    ""name"": ""sonarr_blackhole"",
-                    ""pp"": """",
-                    ""script"": ""Default"",
-                    ""dir"": """",
-                    ""priority"": -100
-                }},
-                {{
-                    ""name"": ""radarr_blackhole"",
-                    ""pp"": """",
-                    ""script"": ""Default"",
-                    ""dir"": """",
-                    ""priority"": -100
-                }},
-            ],
-            ""sorters"": []
-        }}
+    private string FullStatusResponse => @$"{{
+       ""status"": {{
+              ""completeDir"": ""{_config.CompletePath.Replace('\\', '/')}""
+            }}
     }}";
+
+
+    private string ConfigResponse
+    {
+        get
+        {
+            string completePathFixed = _config.CompletePath.Replace('\\', '/');
+
+            var categoryEntries = new List<string>();
+            foreach (var category in _config.Categories)
+            {
+                string dirPath = completePathFixed + "/" + category;
+                categoryEntries.Add($@"{{
+                    ""name"": ""{category}"",
+                    ""pp"": """",
+                    ""script"": ""Default"",
+                    ""dir"": ""{dirPath}"",
+                    ""priority"": -100
+                }}");
+            }
+
+            string categoriesJson = string.Join(",\n", categoryEntries);
+
+            return $@"{{
+                ""config"": {{
+                    ""misc"": {{
+                        ""complete_dir"": ""{completePathFixed}"",
+                        ""enable_tv_sorting"": false,
+                        ""enable_movie_sorting"": false,
+                        ""pre_check"": false,
+                        ""history_retention"": """",
+                        ""history_retention_option"": ""all""
+                    }},
+                    ""categories"": [
+                        {categoriesJson}
+                    ],
+                    ""sorters"": []
+                }}
+            }}";
+        }
     }
 
-    [GeneratedRegex(@"filename=""([^""]+)\.nzb""")]
-    private static partial Regex FileNameRegex();
-    [GeneratedRegex(@"<!--\s*(https?://[^\s]+)\s*-->")]
-    private static partial Regex UrlRegex();
+    [GeneratedRegex(@"<!--\s*([^<>]+)\s*-->")]
+    private static partial Regex CommentRegex();
 }
