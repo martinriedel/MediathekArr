@@ -17,7 +17,7 @@ On first start (empty database) it imports the existing rulesets from pcjones.de
 ```yaml
 services:
   mediathekarr-rulesets:
-    build: ./MediathekArrRulesets
+    image: ghcr.io/martinriedel/mediathekarr-rulesets:latest  # or build: ./MediathekArrRulesets
     restart: unless-stopped
     environment:
       - RULESETS_API_KEY=change-me          # required for any write (API, generator, import)

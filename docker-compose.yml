@@ -27,7 +27,7 @@ services:
 
   # Optional: self-hosted ruleset service with automatic generation (see MediathekArrRulesets/README.md)
   #mediathekarr-rulesets:
-  #  build: ./MediathekArrRulesets
+  #  image: ghcr.io/martinriedel/mediathekarr-rulesets:latest
   #  restart: unless-stopped
   #  container_name: mediathekarr-rulesets
   #  environment:
