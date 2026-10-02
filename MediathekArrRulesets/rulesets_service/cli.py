@@ -20,7 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=5008)
 
-    imp = sub.add_parser("import-upstream", help="Rulesets von pcjones.de (oder --url) importieren")
+    imp = sub.add_parser("import-upstream", help="Rulesets aus UPSTREAM_RULESETS_URLS (oder --url) importieren")
     imp.add_argument("--url")
 
     gen = sub.add_parser("generate", help="Rulesets automatisch erzeugen")
@@ -45,8 +45,9 @@ def main(argv: list[str] | None = None) -> int:
     db = Database(settings.db_path)
 
     if args.cmd == "import-upstream":
-        entries = fetch_upstream_rulesets(args.url or settings.upstream_url)
-        print(json.dumps({"fetched": len(entries), **db.upsert_upstream(entries)}))
+        for url in [args.url] if args.url else settings.upstream_urls:
+            entries = fetch_upstream_rulesets(url)
+            print(json.dumps({"url": url, "fetched": len(entries), **db.upsert_upstream(entries, source=url)}))
         return 0
 
     if args.cmd == "export":

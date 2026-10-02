@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+DEFAULT_UPSTREAMS = [
+    "https://mediathekarr.pcjones.de/metadata/api/rulesets.php",
+    "https://raw.githubusercontent.com/rundfunkarr/rundfunkarr/main/data/rulesets.json",
+]
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -25,7 +30,7 @@ def _str(name: str, default: str = "") -> str:
 class Settings:
     db_path: str = ""
     api_key: str = ""
-    upstream_url: str = ""
+    upstream_urls: list[str] = field(default_factory=list)
     import_upstream_on_start: bool = True
     mediathekarr_api_base_url: str = ""
     tvdb_api_key: str = ""
@@ -47,7 +52,8 @@ class Settings:
         return cls(
             db_path=_str("RULESETS_DB_PATH", "/data/rulesets.sqlite"),
             api_key=_str("RULESETS_API_KEY"),
-            upstream_url=_str("UPSTREAM_RULESETS_URL", "https://mediathekarr.pcjones.de/metadata/api/rulesets.php"),
+            # comma separated; UPSTREAM_RULESETS_URL (single URL) is still honoured
+            upstream_urls=[u.strip() for u in _str("UPSTREAM_RULESETS_URLS", _str("UPSTREAM_RULESETS_URL", ",".join(DEFAULT_UPSTREAMS))).split(",") if u.strip()],
             import_upstream_on_start=_bool("IMPORT_UPSTREAM_ON_START", True),
             mediathekarr_api_base_url=_str("MEDIATHEKARR_API_BASE_URL", "https://mediathekarr.pcjones.de/api/v1"),
             tvdb_api_key=_str("TVDB_API_KEY"),

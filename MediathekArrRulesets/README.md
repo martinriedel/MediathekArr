@@ -10,7 +10,8 @@ A self-hostable ruleset service for MediathekArr. It does two things:
    Python port of MediathekArr's matcher before it is stored, so only rulesets that map entries to the right
    episodes are published. Failed validations are fed back to the LLM for another attempt.
 
-On first start (empty database) it imports the existing rulesets from pcjones.de, so you only extend them.
+On first start (empty database) it imports the existing rulesets from pcjones.de and from
+[Rundfunkarr](https://github.com/rundfunkarr/rundfunkarr) (same format, MIT licensed), so you only extend them.
 
 ## Run
 
@@ -94,7 +95,7 @@ server rejects it; answers from reasoning models (`<think>...</think>`) are hand
 |---|---|---|
 | `RULESETS_DB_PATH` | `/data/rulesets.sqlite` | SQLite database |
 | `RULESETS_API_KEY` | – | Key for writes (`X-Api-Key` or `Authorization: Bearer`). Without it the service is read-only |
-| `UPSTREAM_RULESETS_URL` | pcjones.de `rulesets.php` | Source for the upstream import |
+| `UPSTREAM_RULESETS_URLS` | pcjones.de `rulesets.php`, Rundfunkarr `data/rulesets.json` | Comma-separated sources for the import (paginated API or plain JSON list). Same rulesets from several sources are stored once |
 | `IMPORT_UPSTREAM_ON_START` | `true` | Import upstream rulesets when the database is empty |
 | `TVDB_API_KEY`, `TVDB_PIN` | – | TVDB v4 access. Without a key, show data comes from `MEDIATHEKARR_API_BASE_URL` (by TVDB id only) |
 | `MEDIATHEKARR_API_BASE_URL` | `https://mediathekarr.pcjones.de/api/v1` | Fallback show data source |
@@ -114,7 +115,7 @@ server rejects it; answers from reasoning models (`<think>...</think>`) are hand
 | POST/PUT/DELETE | `/api/media[/{id}]`, `/api/rulesets[/{id}]` | Edit by hand (key) |
 | POST | `/api/generate` `{tvdbIds, names, sonarr, force, forceLlm}` | Start generator in the background (key) |
 | PUT | `/api/generated/{tvdbId}` `{name, rulesets, matchRate}` | Upload from a remote generator (key) |
-| POST | `/api/import/upstream`, `/api/import` | Import from pcjones.de / from an export (key) |
+| POST | `/api/import/upstream[?url=]`, `/api/import` | Import from the upstream sources / from an export (key) |
 
 ## Develop
 

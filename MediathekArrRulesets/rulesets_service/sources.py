@@ -177,6 +177,7 @@ def sonarr_series(settings: Settings) -> list[dict[str, Any]]:
 # ---------------- Upstream rulesets ----------------
 
 def fetch_upstream_rulesets(url: str) -> list[dict[str, Any]]:
+    """Paginated {rulesets, pagination} (pcjones.de, this service) or a plain JSON list (Rundfunkarr's rulesets.json)."""
     entries: list[dict[str, Any]] = []
     with _client() as c:
         page = 1
@@ -184,6 +185,8 @@ def fetch_upstream_rulesets(url: str) -> list[dict[str, Any]]:
             r = c.get(url, params={"page": page})
             r.raise_for_status()
             data = r.json()
+            if isinstance(data, list):
+                return data
             entries.extend(data.get("rulesets") or [])
             p = data.get("pagination") or {}
             if not p or int(p.get("currentPage", page)) >= int(p.get("totalPages", 0)):

@@ -62,7 +62,7 @@ def test_upstream_reimport_keeps_local_edits(client):
     edited = {**UPSTREAM_ENTRY, "mediaId": main.db.list_rulesets()[0]["mediaId"], "topic": "Tatort"}
     client.put(f"/api/rulesets/{rid}", json={k: edited[k] for k in ("mediaId", "topic", "priority", "filters", "titleRegexRules", "matchingStrategy")}, headers=KEY)
     stats = main.db.upsert_upstream([UPSTREAM_ENTRY])
-    assert stats == {"created": 0, "updated": 0, "kept_local": 1}
+    assert stats == {"created": 0, "updated": 0, "kept_local": 1, "duplicate": 0}
     assert main.db.get_ruleset(rid)["topic"] == "Tatort"
 
 
@@ -83,3 +83,50 @@ def test_export_import_roundtrip(client):
     main.db.delete_media(main.db.list_media()[0]["id"])
     assert client.post("/api/import", json=dump, headers=KEY).json() == {"media": 1, "rulesets": 1}
     assert client.get("/health").json()["rulesets"] == 1
+
+
+RUNDFUNKARR_URL = "https://raw.githubusercontent.com/rundfunkarr/rundfunkarr/main/data/rulesets.json"
+
+
+def test_two_sources_same_ids_and_duplicates(client):
+    main.db.upsert_upstream([UPSTREAM_ENTRY], source="https://pcjones")
+    other = {**UPSTREAM_ENTRY, "topic": "Tatort"}  # same id 17, different source and content
+    same = {**UPSTREAM_ENTRY, "id": 99, "priority": 5}  # same content as pcjones' ruleset
+    stats = main.db.upsert_upstream([other, same], source=RUNDFUNKARR_URL)
+    assert stats == {"created": 1, "updated": 0, "kept_local": 0, "duplicate": 1}
+    assert sorted(r["topic"] for r in client.get("/api/rulesets?tvdbId=83214").json()) == ["Tatort", "Tatort|Polizeiruf"]
+    assert len(main.db.list_media()) == 1  # matched by TVDB id
+
+
+def test_list_format_source(monkeypatch):
+    import httpx
+    from rulesets_service import sources
+
+    def handler(request):
+        return httpx.Response(200, json=[UPSTREAM_ENTRY])
+    monkeypatch.setattr(sources, "_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    assert sources.fetch_upstream_rulesets(RUNDFUNKARR_URL) == [UPSTREAM_ENTRY]
+
+
+def test_migrates_old_database(tmp_path):
+    import sqlite3
+    from rulesets_service.db import LEGACY_UPSTREAM, Database
+    path = str(tmp_path / "old.sqlite")
+    con = sqlite3.connect(path)
+    con.executescript("""
+        CREATE TABLE media (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, type TEXT NOT NULL,
+            tmdbId INTEGER, imdbId TEXT, tvdbId INTEGER, upstream_id INTEGER UNIQUE, UNIQUE(name, type));
+        CREATE TABLE rulesets (id INTEGER PRIMARY KEY AUTOINCREMENT, mediaId INTEGER NOT NULL, topic TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 0, filters TEXT NOT NULL DEFAULT '[]', titleRegexRules TEXT NOT NULL DEFAULT '[]',
+            episodeRegex TEXT, seasonRegex TEXT, matchingStrategy TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual',
+            upstream_id INTEGER UNIQUE, match_rate REAL, updated_at TEXT NOT NULL);
+        INSERT INTO media (name, type, tvdbId, upstream_id) VALUES ('Tatort', 'show', 83214, 3);
+        INSERT INTO rulesets (mediaId, topic, matchingStrategy, source, upstream_id, updated_at)
+            VALUES (1, 'Tatort', 'ItemTitleExact', 'upstream', 17, 'x');
+    """)
+    con.commit()
+    con.close()
+    db = Database(path)
+    assert db.get_ruleset(1)["upstream_key"] == f"{LEGACY_UPSTREAM}#17"
+    stats = db.upsert_upstream([{**UPSTREAM_ENTRY, "topic": "Neu"}], source=RUNDFUNKARR_URL)  # id 17 again: no clash
+    assert stats["created"] == 1

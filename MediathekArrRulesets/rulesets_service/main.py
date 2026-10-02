@@ -208,8 +208,7 @@ def start_generation(body: GenerateIn, background: BackgroundTasks) -> dict[str,
 
 @app.post("/api/import/upstream", dependencies=[Depends(require_key)])
 def import_upstream(url: str | None = Query(default=None)) -> dict[str, Any]:
-    entries = fetch_upstream_rulesets(url or settings.upstream_url)
-    return {"fetched": len(entries), **db.upsert_upstream(entries)}
+    return {u: _import_one(u) for u in ([url] if url else settings.upstream_urls)}
 
 
 @app.post("/api/import", dependencies=[Depends(require_key)])
@@ -220,11 +219,16 @@ def import_all(data: dict[str, Any]) -> dict[str, Any]:
 # ---------------- background jobs ----------------
 
 def _initial_import() -> None:
-    try:
-        entries = fetch_upstream_rulesets(settings.upstream_url)
-        log.info("Upstream-Import: %s", db.upsert_upstream(entries))
-    except Exception as ex:
-        log.warning("Upstream-Import fehlgeschlagen: %s", ex)
+    for u in settings.upstream_urls:
+        try:
+            log.info("Upstream-Import %s: %s", u, _import_one(u))
+        except Exception as ex:
+            log.warning("Upstream-Import %s fehlgeschlagen: %s", u, ex)
+
+
+def _import_one(url: str) -> dict[str, Any]:
+    entries = fetch_upstream_rulesets(url)
+    return {"fetched": len(entries), **db.upsert_upstream(entries, source=url)}
 
 
 def _schedule_loop() -> None:

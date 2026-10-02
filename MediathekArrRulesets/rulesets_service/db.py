@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS media (
     tmdbId INTEGER,
     imdbId TEXT,
     tvdbId INTEGER,
-    upstream_id INTEGER UNIQUE,
+    upstream_id INTEGER,
     UNIQUE(name, type)
 );
 
@@ -30,9 +30,10 @@ CREATE TABLE IF NOT EXISTS rulesets (
     episodeRegex TEXT,
     seasonRegex TEXT,
     matchingStrategy TEXT NOT NULL,
-    -- upstream: imported from pcjones.de, manual: created/edited via API, generated: by the generator
+    -- upstream: imported (pcjones.de, Rundfunkarr, ...), manual: created/edited via API, generated: by the generator
     source TEXT NOT NULL DEFAULT 'manual',
-    upstream_id INTEGER UNIQUE,
+    upstream_id INTEGER,
+    upstream_key TEXT UNIQUE,  -- "<source url>#<id in that source>"
     match_rate REAL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY(mediaId) REFERENCES media(id) ON DELETE CASCADE
@@ -46,6 +47,8 @@ CREATE TABLE IF NOT EXISTS generation_log (
     attempted_at TEXT NOT NULL
 );
 """
+
+LEGACY_UPSTREAM = "https://mediathekarr.pcjones.de/metadata/api/rulesets.php"
 
 RULESET_FIELDS = ["mediaId", "topic", "priority", "filters", "titleRegexRules", "episodeRegex", "seasonRegex", "matchingStrategy"]
 
@@ -72,7 +75,19 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._lock = threading.RLock()
+
+    def _migrate(self) -> None:
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(rulesets)")}
+        if "upstream_key" not in cols:
+            # Databases from before multi-source import: ids were only unique within pcjones.de
+            self._conn.execute("ALTER TABLE rulesets ADD COLUMN upstream_key TEXT")
+            self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rulesets_upstream_key ON rulesets(upstream_key)")
+            self._conn.execute("UPDATE rulesets SET upstream_key = ? || '#' || upstream_id, upstream_id = NULL "
+                               "WHERE upstream_id IS NOT NULL", (LEGACY_UPSTREAM,))
+            self._conn.execute("UPDATE media SET upstream_id = NULL")
+            self._conn.commit()
 
     # ---------- helpers ----------
     def _all(self, sql: str, args: tuple = ()) -> list[dict[str, Any]]:
@@ -107,8 +122,8 @@ class Database:
 
     def create_media(self, m: dict[str, Any]) -> int:
         return self._exec(
-            "INSERT INTO media (name, type, tmdbId, imdbId, tvdbId, upstream_id) VALUES (?, ?, ?, ?, ?, ?)",
-            (m["name"], m.get("type", "show"), m.get("tmdbId"), m.get("imdbId"), m.get("tvdbId"), m.get("upstream_id")),
+            "INSERT INTO media (name, type, tmdbId, imdbId, tvdbId) VALUES (?, ?, ?, ?, ?)",
+            (m["name"], m.get("type", "show"), m.get("tmdbId"), m.get("imdbId"), m.get("tvdbId")),
         )
 
     def update_media(self, media_id: int, m: dict[str, Any]) -> None:
@@ -190,14 +205,14 @@ class Database:
     def get_ruleset(self, ruleset_id: int) -> dict[str, Any] | None:
         return self._one("SELECT * FROM rulesets WHERE id = ?", (ruleset_id,))
 
-    def create_ruleset(self, r: dict[str, Any], source: str = "manual", upstream_id: int | None = None, match_rate: float | None = None) -> int:
+    def create_ruleset(self, r: dict[str, Any], source: str = "manual", upstream_key: str | None = None, match_rate: float | None = None) -> int:
         return self._exec(
             """INSERT INTO rulesets (mediaId, topic, priority, filters, titleRegexRules, episodeRegex, seasonRegex,
-                                     matchingStrategy, source, upstream_id, match_rate, updated_at)
+                                     matchingStrategy, source, upstream_key, match_rate, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (r["mediaId"], r["topic"], int(r.get("priority") or 0), _json_text(r.get("filters")),
              _json_text(r.get("titleRegexRules")), r.get("episodeRegex") or None, r.get("seasonRegex") or None,
-             r["matchingStrategy"], source, upstream_id, match_rate, now()),
+             r["matchingStrategy"], source, upstream_key, match_rate, now()),
         )
 
     def update_ruleset(self, ruleset_id: int, r: dict[str, Any], source: str = "manual", match_rate: float | None = None) -> None:
@@ -221,29 +236,44 @@ class Database:
         return [self.create_ruleset({**r, "mediaId": media_id}, source="generated", match_rate=match_rate) for r in rulesets]
 
     # ---------- upstream import ----------
-    def upsert_upstream(self, entries: list[dict[str, Any]]) -> dict[str, int]:
-        """Import rulesets in upstream's public format. Rulesets edited locally (source != upstream) are kept."""
-        stats = {"created": 0, "updated": 0, "kept_local": 0}
+    @staticmethod
+    def _fingerprint(r: dict[str, Any]) -> tuple:
+        """What a ruleset does, ignoring ids and priority, to spot the same ruleset in two sources."""
+        def norm(v: Any) -> str:
+            try:
+                return json.dumps(json.loads(_json_text(v)), sort_keys=True)
+            except (TypeError, ValueError):
+                return str(v)
+        return (r.get("topic") or "", r.get("matchingStrategy") or "", r.get("episodeRegex") or "",
+                r.get("seasonRegex") or "", norm(r.get("filters")), norm(r.get("titleRegexRules")))
+
+    def upsert_upstream(self, entries: list[dict[str, Any]], source: str = LEGACY_UPSTREAM) -> dict[str, int]:
+        """Import rulesets in the public format from one source (a URL).
+
+        Rulesets edited locally (source != upstream) are kept, and a ruleset that another source
+        already provides for the same show is skipped."""
+        stats = {"created": 0, "updated": 0, "kept_local": 0, "duplicate": 0}
         for e in entries:
             m = e.get("media") or {}
             media_name = m.get("media_name") or "Unknown"
             media_type = m.get("media_type") or "show"
-            row = self._one("SELECT * FROM media WHERE upstream_id = ?", (m.get("media_id"),)) if m.get("media_id") else None
-            row = row or self.find_media(name=media_name, type_=media_type)
-            media_data = {"name": media_name, "type": media_type, "tmdbId": m.get("media_tmdbId"),
-                          "imdbId": m.get("media_imdbId"), "tvdbId": m.get("media_tvdbId")}
+            row = self.find_media(tvdb_id=m.get("media_tvdbId"), name=media_name, type_=media_type)
             if row:
                 media_id = row["id"]
-                if row.get("upstream_id") is None and m.get("media_id"):
-                    self._exec("UPDATE media SET upstream_id = ? WHERE id = ?", (m.get("media_id"), media_id))
             else:
-                media_id = self.create_media({**media_data, "upstream_id": m.get("media_id")})
+                media_id = self.create_media({"name": media_name, "type": media_type, "tmdbId": m.get("media_tmdbId"),
+                                              "imdbId": m.get("media_imdbId"), "tvdbId": m.get("media_tvdbId")})
 
             data = {k: e.get(k) for k in RULESET_FIELDS}
             data["mediaId"] = media_id
-            existing = self._one("SELECT * FROM rulesets WHERE upstream_id = ?", (e.get("id"),)) if e.get("id") is not None else None
+            key = f"{source}#{e.get('id')}" if e.get("id") is not None else None
+            existing = self._one("SELECT * FROM rulesets WHERE upstream_key = ?", (key,)) if key else None
             if existing is None:
-                self.create_ruleset(data, source="upstream", upstream_id=e.get("id"))
+                fp = self._fingerprint(data)
+                if any(self._fingerprint(r) == fp for r in self._all("SELECT * FROM rulesets WHERE mediaId = ?", (media_id,))):
+                    stats["duplicate"] += 1
+                    continue
+                self.create_ruleset(data, source="upstream", upstream_key=key)
                 stats["created"] += 1
             elif existing["source"] == "upstream":
                 self.update_ruleset(existing["id"], data, source="upstream")
