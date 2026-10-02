@@ -16,9 +16,29 @@ services:
 
       # Only change this if you are hosting your own API. Not needed for 99% of users
       - MEDIATHEKARR_API_BASE_URL=https://mediathekarr.pcjones.de/api/v1
+      # Use your own rulesets (see the mediathekarr-rulesets service below)
+      #- MEDIATHEKARR_RULESETS_URL=http://mediathekarr-rulesets:5008/api/v1/rulesets
     volumes:
       - /docker/appdata/mediathekarr:/app/config
       - /data/mediathek/complete:/data/mediathek/complete
       - /data/mediathek/incomplete:/data/mediathek/incomplete
     ports:
       - "127.0.0.1:5007:5007" # Port on the left side can be changed to any value you like
+
+  # Optional: self-hosted ruleset service with automatic generation (see MediathekArrRulesets/README.md)
+  #mediathekarr-rulesets:
+  #  build: ./MediathekArrRulesets
+  #  restart: unless-stopped
+  #  container_name: mediathekarr-rulesets
+  #  environment:
+  #    - RULESETS_API_KEY=change-me
+  #    - TVDB_API_KEY=
+  #    - LLM_BASE_URL=http://host.docker.internal:11434/v1 # e.g. Ollama
+  #    - LLM_MODEL=qwen2.5:14b
+  #    - SONARR_URL=http://sonarr:8989
+  #    - SONARR_API_KEY=
+  #    - GENERATE_INTERVAL_HOURS=24
+  #  volumes:
+  #    - /docker/appdata/mediathekarr-rulesets:/data
+  #  ports:
+  #    - "127.0.0.1:5008:5008"

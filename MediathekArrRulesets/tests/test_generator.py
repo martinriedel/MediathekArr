@@ -1,0 +1,89 @@
+from conftest import make_items
+
+from rulesets_service.generator import candidate_topics, generate
+from rulesets_service.matcher import Item
+
+
+class FakeLLM:
+    enabled = True
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.calls = []
+
+    def chat_json(self, messages):
+        self.calls.append(list(messages))
+        return self.answers.pop(0)
+
+
+def test_heuristic_finds_season_episode(show):
+    res = generate(show, make_items(show, "{name} (S{s:02d}/E{e:02d})"), llm=None)
+    assert res.ok and not res.used_llm
+    rs = res.accepted[0].ruleset
+    assert rs.matching_strategy == "SeasonAndEpisodeNumber"
+    assert res.accepted[0].matched == len(show.episodes)
+
+
+def test_heuristic_finds_title_match(show):
+    res = generate(show, make_items(show, "Testserie - {name}"), llm=None)
+    assert res.ok
+    assert res.accepted[0].ruleset.matching_strategy in ("ItemTitleExact", "ItemTitleIncludes")
+
+
+def test_generic_topic_gets_name_filter(show):
+    items = make_items(show, "Testserie: {name}", topic="Krimi am Samstag")
+    items += [Item(topic="Krimi am Samstag", title=f"Andere Serie: Fall {i}", url_video=f"o{i}") for i in range(20)]
+    assert candidate_topics(items, show) == [("Krimi am Samstag", "Testserie")]
+    res = generate(show, items, llm=None)
+    assert res.ok
+    assert res.accepted[0].ruleset.filters == [{"attribute": "title", "type": "Contains", "value": "Testserie"}]
+
+
+def test_wrong_numbering_is_rejected_without_llm(show):
+    # broadcaster counts S/E differently than TVDB: numbers point at the wrong episodes
+    items = make_items(show, "{name} (S{s:02d}/E{e:02d})")
+    for it in items:
+        it.title = it.title.replace("/E0", "/E1")  # E01 -> E11 etc. -> no TVDB episode
+    res = generate(show, [i for i in items], llm=None)
+    # title-based heuristics still rescue it
+    assert res.ok and res.accepted[0].ruleset.matching_strategy != "SeasonAndEpisodeNumber"
+
+
+def test_llm_used_with_feedback(show):
+    items = make_items(show, "Teil {e} der {s}. Runde: {name}?")
+    items = [i for i in items if "Trailer" not in i.title]
+    for i in items:  # make titles useless for the built-in patterns
+        i.title = i.title.replace(i.title.split(": ")[1], "xyz")
+    bad = {"rulesets": [{"topic": "Testserie", "matchingStrategy": "ByAbsoluteEpisodeNumber", "episodeRegex": r"Folge (\d+)"}]}
+    good = {"rulesets": [{"topic": "Testserie", "matchingStrategy": "SeasonAndEpisodeNumber",
+                          "seasonRegex": r"der (\d+)\. Runde", "episodeRegex": r"Teil (\d+)"}]}
+    llm = FakeLLM([bad, good])
+    res = generate(show, items, llm=llm)
+    assert res.ok and res.used_llm
+    assert len(llm.calls) == 2
+    assert "Ergebnis der Prüfung" in llm.calls[1][-1]["content"]
+    assert res.accepted[0].ruleset.season_regex == r"der (\d+)\. Runde"
+
+
+def test_no_items():
+    from rulesets_service.matcher import Show
+    res = generate(Show(1, "X", "X", []), [], llm=None)
+    assert not res.ok and "Keine Einträge" in res.message
+
+
+def test_runner_stores_locally_and_skips_known(show, monkeypatch):
+    from rulesets_service import runner as runner_mod
+    from rulesets_service.config import Settings
+    from rulesets_service.db import Database
+
+    db = Database(":memory:")
+    r = runner_mod.Runner(Settings(min_match_rate=0.8), db)
+    monkeypatch.setattr(r.shows, "get_show", lambda tid: show)
+    monkeypatch.setattr(runner_mod, "fetch_items_for_show", lambda s, topics: make_items(s, "{name} (S{s:02d}/E{e:02d})"))
+
+    first = r.run_one(4711)
+    assert first["status"] == "ok"
+    assert [x["source"] for x in db.list_rulesets(tvdb_id=4711)] == ["generated"]
+    assert r.run_one(4711)["status"] == "skipped"
+    assert r.run_one(4711, force=True)["status"] == "ok"
+    assert len(db.list_rulesets(tvdb_id=4711)) == 1  # replaced, not duplicated

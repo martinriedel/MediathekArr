@@ -13,8 +13,10 @@ using MatchType = MediathekArr.Models.Rulesets.MatchType;
 
 namespace MediathekArr.Services;
 
-public partial class MediathekSearchService(IHttpClientFactory httpClientFactory, IMemoryCache cache, ItemLookupService itemLookupService, ILogger<MediathekSearchService> logger)
+public partial class MediathekSearchService(IHttpClientFactory httpClientFactory, IMemoryCache cache, ItemLookupService itemLookupService, IConfiguration configuration, ILogger<MediathekSearchService> logger)
 {
+    // Point this at a self-hosted MediathekArrRulesets instance (…/api/v1/rulesets) to use your own rulesets
+    private readonly string _rulesetsUrl = configuration["MEDIATHEKARR_RULESETS_URL"] is { Length: > 0 } url ? url : "https://mediathekarr.pcjones.de/metadata/api/rulesets.php";
     private readonly IMemoryCache _cache = cache;
     private readonly ItemLookupService _itemLookupService = itemLookupService;
     private readonly HttpClient _httpClient = httpClientFactory.CreateClient("MediathekClient");
@@ -32,7 +34,7 @@ public partial class MediathekSearchService(IHttpClientFactory httpClientFactory
 
         while (true && currentPage < 100)
         {
-            var response = await _httpClient.GetAsync($"https://mediathekarr.pcjones.de/metadata/api/rulesets.php?page={currentPage++}");
+            var response = await _httpClient.GetAsync($"{_rulesetsUrl}?page={currentPage++}");
             if (response.IsSuccessStatusCode)
             {
                 var responseContent = await response.Content.ReadAsStringAsync();
