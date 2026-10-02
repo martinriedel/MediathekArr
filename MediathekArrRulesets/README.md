@@ -14,6 +14,15 @@ On first start (empty database) it imports the existing rulesets from pcjones.de
 
 ## Run
 
+Quickest way on any Docker host (e.g. a Proxmox LXC), using only this folder:
+
+```sh
+cp .env.example .env   # set at least RULESETS_API_KEY, plus TVDB/LLM/Sonarr as needed
+docker compose up -d
+```
+
+Data lands in `./data`. Or add it to an existing compose file:
+
 ```yaml
 services:
   mediathekarr-rulesets:
