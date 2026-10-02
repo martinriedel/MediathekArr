@@ -1,3 +1,4 @@
+import pytest
 from conftest import make_items
 
 from rulesets_service.generator import candidate_topics, generate
@@ -115,6 +116,12 @@ def test_discovery_finds_topic_and_generates(show, monkeypatch, tmp_path):
     assert res == {"Testserie": "ok", "Unbekannte Doku": "no_match"}  # short news clips are not a series
     assert db.list_rulesets(tvdb_id=4711)
     assert d.run() == []  # covered topic and recent no_match are not retried
+    assert [x["topic"] for x in d.run(full=True)] == ["Unbekannte Doku"]  # a full scan retries no_match, not covered topics
+
+    d._lock.acquire()
+    with pytest.raises(RuntimeError):
+        d.run()  # only one run at a time
+    d._lock.release()
 
 
 def test_mediathekview_pages_walks_whole_catalogue(monkeypatch):

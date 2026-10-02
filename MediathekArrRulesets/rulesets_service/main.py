@@ -160,6 +160,7 @@ def public_settings() -> dict[str, Any]:
         "sonarr": bool(settings.sonarr_url and settings.sonarr_api_key),
         "discovery": bool(settings.tvdb_api_key) and settings.discover_interval_hours > 0,
         "discoverIntervalHours": settings.discover_interval_hours,
+        "discoveryRunning": discovery.running,
         "remoteTarget": settings.target_url or None,
         "minMatchRate": settings.min_match_rate,
     }
@@ -232,11 +233,20 @@ def start_generation(body: GenerateIn, background: BackgroundTasks) -> dict[str,
 
 
 @app.post("/api/discover", dependencies=[Depends(require_key)])
-def start_discovery(background: BackgroundTasks, maxTopics: int | None = None) -> dict[str, Any]:
+def start_discovery(background: BackgroundTasks, maxTopics: int | None = None, full: bool = False) -> dict[str, Any]:
     if not runner.shows.can_search:
         raise HTTPException(400, "Entdeckung braucht TVDB_API_KEY")
-    background.add_task(discovery.run, maxTopics)
-    return {"started": True}
+    if discovery.running:
+        raise HTTPException(409, "Entdeckung läuft bereits")
+    background.add_task(_discover_safely, maxTopics, full)
+    return {"started": True, "full": full}
+
+
+def _discover_safely(max_topics: int | None, full: bool) -> None:
+    try:
+        discovery.run(max_topics, full=full)
+    except Exception as ex:
+        log.warning("Entdeckung fehlgeschlagen: %s", ex)
 
 
 @app.post("/api/import/upstream", dependencies=[Depends(require_key)])

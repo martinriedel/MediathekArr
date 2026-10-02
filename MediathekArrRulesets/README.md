@@ -80,7 +80,11 @@ With `TVDB_API_KEY` set, the service finds new shows on its own, no show list ne
 At most `DISCOVER_MAX_TOPICS` new topics are handled per run, so the backlog is worked off over a few days. Topics
 without a working ruleset are retried after `RETRY_FAILED_AFTER_HOURS`, topics without a TVDB match after
 `DISCOVER_RETRY_NO_MATCH_DAYS`. Results show up under "Entdeckte Themen" on the overview page. Start a run
-by hand with the button there or `python -m rulesets_service discover [--dry-run]`. Set `DISCOVER_INTERVAL_HOURS=0`
+by hand with the button there or `python -m rulesets_service discover [--dry-run]`.
+
+**Full scan:** "Kompletter Scan" on the overview page (`POST /api/discover?full=true`, CLI `discover --full`) walks the
+whole catalogue regardless of `DISCOVER_ITEMS`, handles every candidate topic without the `DISCOVER_MAX_TOPICS` limit
+and retries topics that failed or had no TVDB match before. It can take hours. Only one discovery run happens at a time. Set `DISCOVER_INTERVAL_HOURS=0`
 to turn the schedule off. Sonarr and `--tvdb-id`/`--name` remain available for shows discovery does not catch.
 
 ## LLM
@@ -140,7 +144,7 @@ server rejects it; answers from reasoning models (`<think>...</think>`) are hand
 | GET | `/api/v1/get_show.php?tvdbid=N` | Public, show data in MediathekArr format (needs `TVDB_API_KEY`) |
 | GET | `/api/media`, `/api/rulesets?tvdbId=&mediaId=`, `/api/generation-log`, `/api/export` | Read |
 | POST/PUT/DELETE | `/api/media[/{id}]`, `/api/rulesets[/{id}]` | Edit by hand (key) |
-| POST | `/api/discover[?maxTopics=]` | Start a discovery run in the background (key) |
+| POST | `/api/discover[?maxTopics=&full=true]` | Start a discovery run in the background (key) |
 | GET | `/api/discovery-log` | Topics discovery has looked at |
 | POST | `/api/generate` `{tvdbIds, names, sonarr, force, forceLlm}` | Start generator in the background (key) |
 | PUT | `/api/generated/{tvdbId}` `{name, rulesets, matchRate}` | Upload from a remote generator (key) |

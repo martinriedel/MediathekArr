@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import threading
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -54,29 +55,46 @@ class Discovery:
         self.s = settings
         self.db = db
         self.runner = runner
+        self._lock = threading.Lock()
+
+    @property
+    def running(self) -> bool:
+        return self._lock.locked()
 
     def _covered_topics(self) -> set[str]:
         return {t.strip() for r in self.db.list_rulesets() for t in r["topic"].split("|") if t.strip()}
 
-    def _recently_tried(self, topic: str) -> bool:
+    def _recently_tried(self, topic: str, full: bool = False) -> bool:
         last = self.db.last_discovery(topic)
-        if not last or last["status"] == "ok":
+        if not last or last["status"] in ("ok", "covered"):
             return bool(last)
+        if full:
+            return False
         when = datetime.fromisoformat(last["attempted_at"])
         wait = (timedelta(days=self.s.discover_retry_no_match_days) if last["status"] == "no_match"
                 else timedelta(hours=self.s.retry_failed_after_hours))
         return datetime.now(timezone.utc) - when < wait
 
-    def run(self, max_topics: int | None = None, dry_run: bool = False) -> list[dict[str, Any]]:
+    def run(self, max_topics: int | None = None, dry_run: bool = False, full: bool = False) -> list[dict[str, Any]]:
+        """full: whole catalogue, no topic limit, and topics that failed or had no TVDB match are tried again."""
         if not self.runner.shows.can_search:
             raise RuntimeError("Entdeckung braucht TVDB_API_KEY für die Suche nach Seriennamen")
+        if not self._lock.acquire(blocking=False):
+            raise RuntimeError("Entdeckung läuft bereits")
+        try:
+            return self._run(max_topics, dry_run, full)
+        finally:
+            self._lock.release()
+
+    def _run(self, max_topics: int | None, dry_run: bool, full: bool) -> list[dict[str, Any]]:
+        limit_items = 0 if full else self.s.discover_items
         counts: dict[str, int] = defaultdict(int)
         seen: set[str] = set()
         # one walk per channel, because the search API only pages through a limited window per query;
         # only programme-length entries, and a short pause between pages keeps the load on mediathekviewweb.de low
         for channel in self.s.discover_channels:
             query = [{"fields": ["channel"], "query": channel}]
-            for page in mediathekview_pages(query, self.s.discover_items, duration_min=self.s.discover_min_minutes * 60, pause=0.5):
+            for page in mediathekview_pages(query, limit_items, duration_min=self.s.discover_min_minutes * 60, pause=0.5):
                 fresh = []
                 for it in page:
                     key = it.url_video or f"{it.channel}|{it.topic}|{it.title}|{it.timestamp}"
@@ -86,10 +104,14 @@ class Discovery:
                 count_topics(fresh, self.s.discover_min_minutes, counts)
         covered = self._covered_topics()
         todo = [(t, n) for t, n in candidate_topics([], self.s.discover_min_items, self.s.discover_min_minutes, counts)
-                if t not in covered and not self._recently_tried(t)]
-        log.info("Entdeckung: %d Einträge, %d Themen, %d neu", len(seen), len(counts), len(todo))
+                if t not in covered and not self._recently_tried(t, full)]
+        log.info("Entdeckung%s: %d Einträge, %d Themen, %d neu", " (komplett)" if full else "", len(seen), len(counts), len(todo))
+        if not full:
+            todo = todo[: max_topics or self.s.discover_max_topics]
+        elif max_topics:
+            todo = todo[:max_topics]
         results = []
-        for topic, count in todo[: max_topics or self.s.discover_max_topics]:
+        for topic, count in todo:
             results.append(self._one(topic, count, dry_run))
         return results
 
