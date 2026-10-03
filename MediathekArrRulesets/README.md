@@ -93,7 +93,9 @@ to turn the schedule off. Sonarr and `--tvdb-id`/`--name` remain available for s
 when started. It handles every candidate topic without the `DISCOVER_MAX_TOPICS` limit, retries topics that failed or
 had no TVDB match before, and checks every stored ruleset against the current entries: generated rulesets that map
 less than `MIN_MATCH_RATE` are generated anew (the old ones stay if that fails), imported or hand-made ones are only
-reported as `stale`. It can take hours. Only one discovery run happens at a time.
+reported as `stale`. It can take hours. Only one discovery run happens at a time. "Anhalten" (`POST /api/discover/stop`) stops it after the
+current topic; stopped or interrupted (e.g. container restart), the next full scan continues where it left off instead
+of starting over. Starting it again after it finished begins a new one.
 
 ## LLM
 
@@ -134,6 +136,7 @@ server rejects it; answers from reasoning models (`<think>...</think>`) are hand
 | `MEDIATHEKARR_API_BASE_URL` | `https://mediathekarr.pcjones.de/api/v1` | Fallback show data source |
 | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` | – | OpenAI-compatible endpoint of your LLM. Without it only built-in patterns are used |
 | `LLM_MAX_ATTEMPTS` | `3` | LLM rounds per show |
+| `LLM_PAUSE_SECONDS` | `0` | Pause after every LLM request, to keep the GPU cooler during long scans |
 | `MIN_MATCH_RATE` | `0.8` | Share of a topic's entries a ruleset must map to be accepted |
 | `SONARR_URL`, `SONARR_API_KEY` | – | Show list for `--sonarr` and the schedule |
 | `GENERATE_INTERVAL_HOURS` | `0` | Run the generator for all Sonarr shows periodically |
@@ -154,6 +157,7 @@ server rejects it; answers from reasoning models (`<think>...</think>`) are hand
 | GET | `/api/media`, `/api/rulesets?tvdbId=&mediaId=`, `/api/generation-log`, `/api/export` | Read |
 | POST/PUT/DELETE | `/api/media[/{id}]`, `/api/rulesets[/{id}]` | Edit by hand (key) |
 | POST | `/api/discover[?maxTopics=&full=true]` | Start a discovery run in the background (key) |
+| POST | `/api/discover/stop` | Stop the running discovery after the current topic (key) |
 | GET | `/api/discovery-log` | Topics discovery has looked at |
 | POST | `/api/generate` `{tvdbIds, names, sonarr, force, forceLlm}` | Start generator in the background (key) |
 | PUT | `/api/generated/{tvdbId}` `{name, rulesets, matchRate}` | Upload from a remote generator (key) |

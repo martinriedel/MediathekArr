@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -17,6 +18,7 @@ class LLMClient:
         self.base_url = settings.llm_base_url.rstrip("/")
         self.model = settings.llm_model
         self.api_key = settings.llm_api_key
+        self.pause = settings.llm_pause_seconds
 
     @property
     def enabled(self) -> bool:
@@ -36,6 +38,8 @@ class LLMClient:
                 r = c.post(f"{self.base_url}/chat/completions", json=body, headers=headers)
             r.raise_for_status()
             content = r.json()["choices"][0]["message"]["content"] or ""
+        if self.pause > 0:
+            time.sleep(self.pause)  # give the GPU a break between requests (LLM_PAUSE_SECONDS)
         return parse_json_object(content)
 
 

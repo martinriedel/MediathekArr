@@ -10,12 +10,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from .config import Settings
-from .db import Database
+from .db import Database, now
 from .matcher import Item, format_title, should_skip_item
 from .runner import Runner
 from .sources import filmliste_items, mediathekview_pages
 
 log = logging.getLogger(__name__)
+
+FULL_SCAN_KEY = "full_scan_started_at"
 
 
 def _norm(s: str | None) -> str:
@@ -56,20 +58,33 @@ class Discovery:
         self.db = db
         self.runner = runner
         self._lock = threading.Lock()
+        self._stop = threading.Event()
 
     @property
     def running(self) -> bool:
         return self._lock.locked()
 
+    @property
+    def full_scan_pending(self) -> str | None:
+        """Start time of a full scan that was stopped or interrupted and will be resumed."""
+        return self.db.get_state(FULL_SCAN_KEY)
+
+    def stop(self) -> bool:
+        """Ask a running scan to stop after the current topic; a full scan resumes from there next time."""
+        if not self.running:
+            return False
+        self._stop.set()
+        return True
+
     def _covered_topics(self) -> set[str]:
         return {t.strip() for r in self.db.list_rulesets() for t in r["topic"].split("|") if t.strip()}
 
-    def _recently_tried(self, topic: str, full: bool = False) -> bool:
+    def _recently_tried(self, topic: str, full: bool = False, since: str | None = None) -> bool:
         last = self.db.last_discovery(topic)
         if not last or last["status"] in ("ok", "covered"):
             return bool(last)
         if full:
-            return False
+            return bool(since) and last["attempted_at"] > since  # already handled earlier in this full scan
         when = datetime.fromisoformat(last["attempted_at"])
         wait = (timedelta(days=self.s.discover_retry_no_match_days) if last["status"] == "no_match"
                 else timedelta(hours=self.s.retry_failed_after_hours))
@@ -82,6 +97,7 @@ class Discovery:
             raise RuntimeError("Entdeckung braucht TVDB_API_KEY für die Suche nach Seriennamen")
         if not self._lock.acquire(blocking=False):
             raise RuntimeError("Entdeckung läuft bereits")
+        self._stop.clear()
         try:
             return self._run(max_topics, dry_run, full)
         finally:
@@ -89,6 +105,15 @@ class Discovery:
 
     def _run(self, max_topics: int | None, dry_run: bool, full: bool) -> list[dict[str, Any]]:
         limit_items = 0 if full else self.s.discover_items
+        since = None
+        if full and not dry_run:
+            since = self.db.get_state(FULL_SCAN_KEY)
+            if since:
+                log.info("Kompletter Scan wird fortgesetzt (begonnen %s)", since)
+            else:
+                since = now()
+                self.db.set_state(FULL_SCAN_KEY, since)
+                self.db.clear_rechecked()
         counts: dict[str, int] = defaultdict(int)
         seen: set[int] = set()
         source = "filmliste"
@@ -106,7 +131,7 @@ class Discovery:
             self._count_api(counts, seen, limit_items)
         covered = self._covered_topics()
         todo = [(t, n) for t, n in candidate_topics([], self.s.discover_min_items, self.s.discover_min_minutes, counts)
-                if t not in covered and not self._recently_tried(t, full)]
+                if t not in covered and not self._recently_tried(t, full, since)]
         log.info("Entdeckung%s über %s: %d Einträge, %d Themen, %d neu", " (komplett)" if full else "", source,
                  len(seen), len(counts), len(todo))
         if not full:
@@ -115,11 +140,22 @@ class Discovery:
             todo = todo[:max_topics]
         results = []
         for topic, count in todo:
+            if self._stop.is_set():
+                log.info("Entdeckung angehalten")
+                return results
             results.append(self._one(topic, count, dry_run))
         if full:
             # existing rulesets: does each still fit what the Mediathek shows today?
-            for res in self.runner.recheck_all(dry_run=dry_run):
+            for res in self.runner.recheck_all(dry_run=dry_run, skip=self.db.rechecked_ids() if not dry_run else None,
+                                               done=None if dry_run else self.db.mark_rechecked,
+                                               stop=self._stop.is_set):
                 results.append(self._log(res["name"], res["tvdbId"], res["status"], res["message"], dry_run))
+            if self._stop.is_set():
+                log.info("Kompletter Scan angehalten, wird beim nächsten Start fortgesetzt")
+                return results
+            if not dry_run:
+                self.db.set_state(FULL_SCAN_KEY, None)
+                self.db.clear_rechecked()
         return results
 
     def _add(self, items: Iterable[Item], counts: dict[str, int], seen: set[int]) -> None:

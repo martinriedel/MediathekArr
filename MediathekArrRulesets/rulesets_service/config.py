@@ -43,6 +43,7 @@ class Settings:
     llm_model: str = ""
     llm_api_key: str = ""
     llm_max_attempts: int = 3
+    llm_pause_seconds: float = 0
     sonarr_url: str = ""
     sonarr_api_key: str = ""
     target_url: str = ""
@@ -76,6 +77,7 @@ class Settings:
             llm_model=_str("LLM_MODEL"),
             llm_api_key=_str("LLM_API_KEY"),
             llm_max_attempts=int(_float("LLM_MAX_ATTEMPTS", 3)),
+            llm_pause_seconds=_float("LLM_PAUSE_SECONDS", 0),
             sonarr_url=_str("SONARR_URL").rstrip("/"),
             sonarr_api_key=_str("SONARR_API_KEY"),
             target_url=_str("GENERATOR_TARGET_URL").rstrip("/"),

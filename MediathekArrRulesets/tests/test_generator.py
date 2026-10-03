@@ -219,3 +219,32 @@ def test_recheck_regenerates_generated_and_reports_imported(show, monkeypatch):
     res = r.recheck_all()
     assert [x["status"] for x in res] == ["stale"]
     assert db.list_rulesets(tvdb_id=4711)[0]["source"] == "upstream"
+
+
+def test_full_scan_resumes_after_stop(show, monkeypatch):
+    from rulesets_service import discovery as disc_mod
+    from rulesets_service import runner as runner_mod
+    from rulesets_service.config import Settings
+    from rulesets_service.db import Database
+
+    db = Database(":memory:")
+    s = Settings(tvdb_api_key="k", discover_min_items=3, discover_min_minutes=10)
+    r = runner_mod.Runner(s, db)
+    monkeypatch.setattr(r.shows, "search", lambda name: [])
+    entries = [Item(channel="WDR", topic=t, title=f"Folge {i}", duration=1800, url_video=f"{t}{i}")
+               for t, n in (("Doku A", 6), ("Doku B", 5), ("Doku C", 4)) for i in range(n)]
+    monkeypatch.setattr(disc_mod, "filmliste_items", lambda url: iter(entries))
+    d = disc_mod.Discovery(s, db, r)
+
+    original = d._one
+    def stop_after_first(topic, count, dry_run):
+        d._stop.set()
+        return original(topic, count, dry_run)
+    monkeypatch.setattr(d, "_one", stop_after_first)
+    assert [x["topic"] for x in d.run(full=True)] == ["Doku A"]
+    assert d.full_scan_pending
+
+    monkeypatch.setattr(d, "_one", original)
+    assert [x["topic"] for x in d.run(full=True)] == ["Doku B", "Doku C"]  # resumed, Doku A not again
+    assert d.full_scan_pending is None
+    assert [x["topic"] for x in d.run(full=True)] == ["Doku A", "Doku B", "Doku C"]  # a new full scan starts over
