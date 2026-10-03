@@ -59,6 +59,7 @@ class Discovery:
         self.runner = runner
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self.running_full = False
 
     @property
     def running(self) -> bool:
@@ -98,9 +99,11 @@ class Discovery:
         if not self._lock.acquire(blocking=False):
             raise RuntimeError("Entdeckung läuft bereits")
         self._stop.clear()
+        self.running_full = full
         try:
             return self._run(max_topics, dry_run, full)
         finally:
+            self.running_full = False
             self._lock.release()
 
     def _run(self, max_topics: int | None, dry_run: bool, full: bool) -> list[dict[str, Any]]:

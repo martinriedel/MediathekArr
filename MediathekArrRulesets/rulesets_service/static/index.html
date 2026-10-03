@@ -73,7 +73,9 @@ async function load() {
   const [st, health, log, rs, disc] = await Promise.all(["/api/settings", "/health", "/api/generation-log", "/api/rulesets", "/api/discovery-log"].map(u => fetch(u).then(r => r.json())));
   const yes = (b, t) => `<span class="${b ? "ok" : "muted"}">${b ? "✓" : "–"} ${t}</span>`;
   $("#status").innerHTML = [`${health.rulesets} Rulesets`, yes(st.writable, "Schreibzugriff"), yes(st.llm, "KI " + (st.llmModel || "")),
-    yes(st.tvdbDirect, "TVDB-Key"), yes(st.sonarr, "Sonarr"), yes(st.discovery, "Entdeckung" + (st.discovery ? " alle " + st.discoverIntervalHours + " h" : "")), st.discoveryRunning ? "Entdeckung läuft …" : "", st.fullScanPending ? "kompletter Scan angehalten (seit " + esc(st.fullScanPending.slice(0, 16).replace("T", " ")) + ")" : "",
+    yes(st.tvdbDirect, "TVDB-Key"), yes(st.sonarr, "Sonarr"), yes(st.discovery, "Entdeckung" + (st.discovery ? " alle " + st.discoverIntervalHours + " h" : "")), st.fullScanRunning ? "kompletter Scan läuft (seit " + esc(new Date(st.fullScanPending).toLocaleString("de-DE", {dateStyle: "short", timeStyle: "short"})) + ") …"
+      : st.discoveryRunning ? "Entdeckung läuft …" : "",
+    st.fullScanPending && !st.fullScanRunning ? "kompletter Scan angehalten, begonnen " + esc(new Date(st.fullScanPending).toLocaleString("de-DE", {dateStyle: "short", timeStyle: "short"})) : "",
     st.llmPauseSeconds ? "KI-Pause " + st.llmPauseSeconds + " s" : "", st.remoteTarget ? "Ziel: " + esc(st.remoteTarget) : ""].filter(Boolean).join(" · ");
   $("#log tbody").innerHTML = log.slice(0, 50).map(l => `<tr><td>${esc(l.name)} <span class="muted">${l.tvdbId}</span></td>
     <td class="${l.status === "ok" ? "ok" : "bad"}">${esc(l.status)}</td><td>${esc(l.message)}</td><td class="muted">${esc(l.attempted_at)}</td></tr>`).join("")

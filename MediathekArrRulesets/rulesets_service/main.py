@@ -161,6 +161,7 @@ def public_settings() -> dict[str, Any]:
         "discovery": bool(settings.tvdb_api_key) and settings.discover_interval_hours > 0,
         "discoverIntervalHours": settings.discover_interval_hours,
         "discoveryRunning": discovery.running,
+        "fullScanRunning": discovery.running and discovery.running_full,
         "fullScanPending": discovery.full_scan_pending,
         "llmPauseSeconds": settings.llm_pause_seconds,
         "remoteTarget": settings.target_url or None,
