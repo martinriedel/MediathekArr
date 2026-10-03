@@ -161,6 +161,8 @@ def public_settings() -> dict[str, Any]:
         "discovery": bool(settings.tvdb_api_key) and settings.discover_interval_hours > 0,
         "discoverIntervalHours": settings.discover_interval_hours,
         "discoveryRunning": discovery.running,
+        "fullScanPending": discovery.full_scan_pending,
+        "llmPauseSeconds": settings.llm_pause_seconds,
         "remoteTarget": settings.target_url or None,
         "minMatchRate": settings.min_match_rate,
     }
@@ -240,6 +242,11 @@ def start_discovery(background: BackgroundTasks, maxTopics: int | None = None, f
         raise HTTPException(409, "Entdeckung läuft bereits")
     background.add_task(_discover_safely, maxTopics, full)
     return {"started": True, "full": full}
+
+
+@app.post("/api/discover/stop", dependencies=[Depends(require_key)])
+def stop_discovery() -> dict[str, Any]:
+    return {"stopping": discovery.stop(), "fullScanPending": discovery.full_scan_pending}
 
 
 def _discover_safely(max_topics: int | None, full: bool) -> None:

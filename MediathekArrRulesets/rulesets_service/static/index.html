@@ -39,7 +39,8 @@
       <label><input id="force" type="checkbox"> vorhandene neu erzeugen</label>
       <button id="gen">Starten</button>
       <button id="disc">Neue Serien entdecken</button>
-      <button id="discfull" title="Ganze Mediathek, ohne Themen-Limit, frühere Fehlschläge neu versuchen und alle vorhandenen Rulesets prüfen. Kann Stunden dauern.">Kompletter Scan</button>
+      <button id="discfull" title="Ganze Mediathek, ohne Themen-Limit, frühere Fehlschläge neu versuchen und alle vorhandenen Rulesets prüfen. Kann Stunden dauern. Angehalten geht er beim nächsten Start dort weiter.">Kompletter Scan</button>
+      <button id="discstop">Anhalten</button>
       <button id="imp">Von pcjones.de &amp; Rundfunkarr importieren</button>
     </div>
     <p id="genout" class="muted"></p>
@@ -72,13 +73,16 @@ async function load() {
   const [st, health, log, rs, disc] = await Promise.all(["/api/settings", "/health", "/api/generation-log", "/api/rulesets", "/api/discovery-log"].map(u => fetch(u).then(r => r.json())));
   const yes = (b, t) => `<span class="${b ? "ok" : "muted"}">${b ? "✓" : "–"} ${t}</span>`;
   $("#status").innerHTML = [`${health.rulesets} Rulesets`, yes(st.writable, "Schreibzugriff"), yes(st.llm, "KI " + (st.llmModel || "")),
-    yes(st.tvdbDirect, "TVDB-Key"), yes(st.sonarr, "Sonarr"), yes(st.discovery, "Entdeckung" + (st.discovery ? " alle " + st.discoverIntervalHours + " h" : "")), st.discoveryRunning ? "Entdeckung läuft …" : "", st.remoteTarget ? "Ziel: " + esc(st.remoteTarget) : ""].filter(Boolean).join(" · ");
+    yes(st.tvdbDirect, "TVDB-Key"), yes(st.sonarr, "Sonarr"), yes(st.discovery, "Entdeckung" + (st.discovery ? " alle " + st.discoverIntervalHours + " h" : "")), st.discoveryRunning ? "Entdeckung läuft …" : "", st.fullScanPending ? "kompletter Scan angehalten (seit " + esc(st.fullScanPending.slice(0, 16).replace("T", " ")) + ")" : "",
+    st.llmPauseSeconds ? "KI-Pause " + st.llmPauseSeconds + " s" : "", st.remoteTarget ? "Ziel: " + esc(st.remoteTarget) : ""].filter(Boolean).join(" · ");
   $("#log tbody").innerHTML = log.slice(0, 50).map(l => `<tr><td>${esc(l.name)} <span class="muted">${l.tvdbId}</span></td>
     <td class="${l.status === "ok" ? "ok" : "bad"}">${esc(l.status)}</td><td>${esc(l.message)}</td><td class="muted">${esc(l.attempted_at)}</td></tr>`).join("")
     || `<tr><td colspan="4" class="muted">noch keine</td></tr>`;
   $("#disclog tbody").innerHTML = disc.slice(0, 100).map(l => `<tr><td>${esc(l.topic)}</td>
     <td class="${["ok", "regenerated"].includes(l.status) ? "ok" : l.status === "covered" ? "muted" : "bad"}">${esc(l.status)}</td><td>${esc(l.message)}</td><td class="muted">${esc(l.attempted_at)}</td></tr>`).join("")
     || `<tr><td colspan="4" class="muted">noch keine</td></tr>`;
+  $("#discfull").textContent = st.fullScanPending && !st.discoveryRunning ? "Kompletten Scan fortsetzen" : "Kompletter Scan";
+  $("#discstop").style.display = st.discoveryRunning ? "" : "none";
   rulesets = rs; render();
 }
 
@@ -105,8 +109,9 @@ $("#gen").onclick = async () => {
 };
 $("#disc").onclick = async () => { if (await post("/api/discover")) setTimeout(load, 10000); };
 $("#discfull").onclick = async () => {
-  if (confirm("Kompletten Scan starten? Er geht die ganze Mediathek durch und kann Stunden dauern.") && await post("/api/discover?full=true")) setTimeout(load, 10000);
+  if (confirm("Kompletten Scan starten? Er geht die ganze Mediathek durch und kann Stunden dauern. Du kannst ihn jederzeit anhalten und später fortsetzen.") && await post("/api/discover?full=true")) setTimeout(load, 10000);
 };
+$("#discstop").onclick = async () => { if (await post("/api/discover/stop")) setTimeout(load, 3000); };
 $("#imp").onclick = async () => { if (await post("/api/import/upstream")) load(); };
 $("#filter").oninput = render;
 load();

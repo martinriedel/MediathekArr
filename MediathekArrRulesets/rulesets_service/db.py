@@ -47,6 +47,15 @@ CREATE TABLE IF NOT EXISTS discovery_log (
     attempted_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS full_scan_rechecked (
+    tvdbId INTEGER PRIMARY KEY
+);
+
 CREATE TABLE IF NOT EXISTS generation_log (
     tvdbId INTEGER PRIMARY KEY,
     name TEXT,
@@ -62,7 +71,7 @@ RULESET_FIELDS = ["mediaId", "topic", "priority", "filters", "titleRegexRules", 
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _json_text(value: Any) -> str:
@@ -337,6 +346,27 @@ class Database:
 
     def discovery_log(self) -> list[dict[str, Any]]:
         return self._all("SELECT * FROM discovery_log ORDER BY attempted_at DESC")
+
+    # ---------- state of a full scan that can be resumed ----------
+    def get_state(self, key: str) -> str | None:
+        row = self._one("SELECT value FROM state WHERE key = ?", (key,))
+        return row["value"] if row else None
+
+    def set_state(self, key: str, value: str | None) -> None:
+        if value is None:
+            self._exec("DELETE FROM state WHERE key = ?", (key,))
+        else:
+            self._exec("INSERT INTO state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                       (key, value))
+
+    def rechecked_ids(self) -> set[int]:
+        return {r["tvdbId"] for r in self._all("SELECT tvdbId FROM full_scan_rechecked")}
+
+    def mark_rechecked(self, tvdb_id: int) -> None:
+        self._exec("INSERT OR IGNORE INTO full_scan_rechecked (tvdbId) VALUES (?)", (tvdb_id,))
+
+    def clear_rechecked(self) -> None:
+        self._exec("DELETE FROM full_scan_rechecked")
 
     def last_generation(self, tvdb_id: int) -> dict[str, Any] | None:
         return self._one("SELECT * FROM generation_log WHERE tvdbId = ?", (tvdb_id,))

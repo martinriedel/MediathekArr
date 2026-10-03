@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -113,14 +113,21 @@ class Runner:
         status = "regenerated" if res["status"] == "ok" else "stale"
         return {"tvdbId": tvdb_id, "name": name, "status": status, "message": f"{summary}; neu erzeugt: {res['message']}"}
 
-    def recheck_all(self, dry_run: bool = False) -> list[dict[str, Any]]:
+    def recheck_all(self, dry_run: bool = False, skip: set[int] | None = None,
+                    done: Callable[[int], None] | None = None,
+                    stop: Callable[[], bool] | None = None) -> list[dict[str, Any]]:
+        """skip: shows already checked (resumed full scan); done(tvdb_id) after each show; stop() ends early."""
         out = []
-        for tvdb_id in sorted({r["tvdbId"] for r in self.db.list_rulesets() if r["tvdbId"]}):
+        for tvdb_id in sorted({r["tvdbId"] for r in self.db.list_rulesets() if r["tvdbId"]} - (skip or set())):
+            if stop and stop():
+                break
             try:
                 res = self.recheck(tvdb_id, dry_run=dry_run)
             except Exception as ex:
                 log.warning("Prüfung von %s fehlgeschlagen: %s", tvdb_id, ex)
                 continue
+            if done:
+                done(tvdb_id)
             if res:
                 log.info("Prüfung %s (%s): %s - %s", res["name"], tvdb_id, res["status"], res["message"])
                 out.append(res)
