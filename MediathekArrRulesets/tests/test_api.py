@@ -142,6 +142,8 @@ def test_get_show_in_mediathekarr_format(client, monkeypatch):
         calls.append(path)
         if path.endswith("/translations/deu"):
             return {"data": {"name": "Wir werden Camper"}}
+        if path.endswith("/translations/eng"):
+            return {"data": {"name": "We Become Campers"}}
         return {"data": {"name": "Wir werden Camper", "aliases": [{"language": "eng", "name": "x"}, {"language": "deu", "name": "Camper"}],
                          "episodes": [{"name": "Folge 1", "aired": "2024-05-01", "runtime": 30, "seasonNumber": 1, "number": 1, "absoluteNumber": None}]}}
     monkeypatch.setattr(shows, "_tvdb_get", fake_get)
@@ -149,11 +151,12 @@ def test_get_show_in_mediathekarr_format(client, monkeypatch):
     assert body["status"] == "success"
     data = body["data"]
     assert data["id"] == 397310 and data["german_name"] == "Wir werden Camper"
+    assert data["name"] == "We Become Campers"  # Sonarr matches releases by the English title
     assert data["aliases"] == [{"language": "deu", "name": "Camper"}]
     assert data["episodes"][0] == {"name": "Folge 1", "aired": "2024-05-01", "runtime": 30, "seasonNumber": 1,
                                    "episodeNumber": 1, "absoluteNumber": None}
     client.get("/api/v1/get_show.php?tvdbid=397310")
-    assert len(calls) == 2  # second call served from cache
+    assert len(calls) == 3  # second call served from cache
 
     def broken(path, params=None):
         raise RuntimeError("TVDB down")
