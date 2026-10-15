@@ -244,11 +244,17 @@ class ShowSource:
             german = self._tvdb_get(f"/series/{tvdb_id}/translations/deu").get("data", {}).get("name") or german
         except httpx.HTTPError:
             pass
+        # Sonarr titles shows by their English TVDB name, so releases must carry that name to be matched.
+        english = series.get("name") or ""
+        try:
+            english = self._tvdb_get(f"/series/{tvdb_id}/translations/eng").get("data", {}).get("name") or english
+        except httpx.HTTPError:
+            pass
         aliases = [{"language": a["language"], "name": a.get("name") or ""}
                    for a in series.get("aliases") or [] if isinstance(a, dict) and a.get("language") == "deu"]
         payload = {
             "id": tvdb_id,
-            "name": series.get("name") or german,
+            "name": english or german,
             "german_name": german,
             "aliases": aliases,
             "episodes": [
